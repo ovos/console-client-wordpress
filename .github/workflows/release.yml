@@ -1,0 +1,31 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # the tag must match the plugin header and the wp.org stable tag —
+      # fail the release instead of shipping a zip that lies about its version
+      - name: Verify version matches tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "^ \* Version: ${version}\$" ovos-console.php
+          grep -q "^Stable tag: ${version}\$" readme.txt
+
+      - name: Build plugin zip
+        run: git archive --format=zip --prefix=ovos-console/ -o ovos-console.zip "${GITHUB_REF_NAME}"
+
+      - name: Create GitHub release
+        run: gh release create "${GITHUB_REF_NAME}" ovos-console.zip --title "${GITHUB_REF_NAME}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

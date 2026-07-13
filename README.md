@@ -86,7 +86,7 @@ Both are safe to call unconditionally — when the plugin is disabled or unconfi
 - The repository root **is** the plugin directory — for local development, symlink/junction it into `wp-content/plugins/ovos-console`.
 - `assets/console-client.js` is a bundled copy of the console's browser client (intentionally ES5 — do not modernize); it is synced from the console repository on client releases, never edited here.
 - `readme.txt` is the wordpress.org-format readme; this file is for GitHub.
-- Release zip: `git archive --format=zip --prefix=ovos-console/ -o ovos-console.zip develop` — packs exactly the committed tree under the required `ovos-console/` directory.
+- Releasing: push a `v*` tag whose version matches the plugin header and readme.txt stable tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) — the release workflow verifies the versions, builds the zip via `git archive` and publishes a GitHub release with `ovos-console.zip` attached.
 
 ## License
 
