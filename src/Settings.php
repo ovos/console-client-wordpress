@@ -225,12 +225,14 @@ class Settings
 	
 	protected function renderTestNotice(): void
 	{
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- reads a status flag set by our own redirect; integer-cast, display only
 		if(isset($_GET['ovos-console-test']) === false)
 		{
 			return;
 		}
 		
 		$status = (int)$_GET['ovos-console-test'];
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		
 		[$class, $message] = match(true)
 		{

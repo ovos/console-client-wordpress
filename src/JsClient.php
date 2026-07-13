@@ -83,6 +83,7 @@ class JsClient
 				. "}; };";
 		}
 		
+		// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- inline bootstrap script; every dynamic value is wp_json_encode()d
 		echo "<script>\n"
 			. "(function () {\n"
 			. "\tvar options = " . wp_json_encode($options, JSON_UNESCAPED_SLASHES) . ";" . $context . "\n"
@@ -95,5 +96,6 @@ class JsClient
 			. "\tdocument.head.appendChild(script);\n"
 			. "})();\n"
 			. "</script>\n";
+		// phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 }

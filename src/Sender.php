@@ -1,11 +1,14 @@
 <?php
 declare(strict_types=1);
+// phpcs:disable WordPress.PHP.DevelopmentFunctions -- error_reporting()/set_error_handler() are this plugin's purpose: it captures PHP errors, chaining any previous handler
+// phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec -- the fire-and-forget ingest call needs millisecond timeouts (300 ms connect / 1 s total) the WP HTTP API cannot express; wp_remote_post() is the fallback when curl is missing
 
 namespace OvosConsole;
 
 use ErrorException;
 use Throwable;
 
+use function array_map;
 use function array_slice;
 use function array_values;
 use function count;
@@ -18,7 +21,6 @@ use function error_reporting;
 use function function_exists;
 use function in_array;
 use function json_encode;
-use function parse_url;
 use function register_shutdown_function;
 use function rtrim;
 use function session_id;
@@ -313,17 +315,19 @@ class Sender
 		{
 			$context['host'] = $this->homeHost();
 			$context['args'] = isset($_SERVER['argv'])
-				? array_values((array)$_SERVER['argv'])
+				? array_values(array_map('sanitize_text_field', wp_unslash((array)$_SERVER['argv'])))
 				: [];
 		}
 		else
 		{
-			$context['host'] = (string)($_SERVER['HTTP_HOST'] ?? $this->homeHost());
-			$context['uri'] = (string)($_SERVER['REQUEST_URI'] ?? '');
-			$context['method'] = (string)($_SERVER['REQUEST_METHOD'] ?? '');
-			$context['referer'] = (string)($_SERVER['HTTP_REFERER'] ?? '');
-			$context['ip'] = (string)($_SERVER['REMOTE_ADDR'] ?? '');
-			$context['ua'] = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
+			$host = $this->server('HTTP_HOST');
+			
+			$context['host'] = $host !== '' ? $host : $this->homeHost();
+			$context['uri'] = $this->server('REQUEST_URI');
+			$context['method'] = $this->server('REQUEST_METHOD');
+			$context['referer'] = $this->server('HTTP_REFERER');
+			$context['ip'] = $this->server('REMOTE_ADDR');
+			$context['ua'] = $this->server('HTTP_USER_AGENT');
 			
 			if(session_status() === PHP_SESSION_ACTIVE)
 			{
@@ -350,22 +354,36 @@ class Sender
 	}
 	
 	/**
+	 * One $_SERVER string, unslashed and sanitized
+	 */
+	protected function server(
+		string $key,
+	): string
+	{
+		return isset($_SERVER[$key])
+			? sanitize_text_field(wp_unslash((string)$_SERVER[$key]))
+			: '';
+	}
+	
+	/**
 	 * Request variables, redacted before sending (the console scrubs
 	 * again server-side as a backstop)
 	 */
 	protected function buildRequest(): array
 	{
+		// phpcs:disable WordPress.Security.NonceVerification, WordPress.Security.ValidatedSanitizedInput -- request variables are collected as diagnostic payload, never processed; secrets are redacted here and again server-side
 		$request = [];
 		
 		if(!empty($_GET))
 		{
-			$request['get'] = Redactor::scrub((array)$_GET);
+			$request['get'] = Redactor::scrub(wp_unslash((array)$_GET));
 		}
 		
 		if(!empty($_POST))
 		{
-			$request['post'] = Redactor::scrub((array)$_POST);
+			$request['post'] = Redactor::scrub(wp_unslash((array)$_POST));
 		}
+		// phpcs:enable WordPress.Security.NonceVerification, WordPress.Security.ValidatedSanitizedInput
 		
 		return $request;
 	}
@@ -445,7 +463,7 @@ class Sender
 			return '';
 		}
 		
-		$host = parse_url((string)home_url(), PHP_URL_HOST);
+		$host = wp_parse_url((string)home_url(), PHP_URL_HOST);
 		
 		return $host === false || $host === null ? '' : (string)$host;
 	}

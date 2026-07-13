@@ -6,8 +6,8 @@ namespace OvosConsole;
 use ErrorException;
 use Throwable;
 
-use function date;
 use function get_class;
+use function gmdate;
 use function preg_match;
 use function strpos;
 use function substr;
@@ -91,7 +91,7 @@ final class Payload
 		return [
 			'v' => 1,
 			'priority' => $priority ?? self::priorityFor($event),
-			'timestamp' => date('c'),
+			'timestamp' => gmdate('c'),
 			'message' => $event->getMessage(),
 			'events' => self::events($event),
 			'extra' => $extra,
@@ -107,7 +107,7 @@ final class Payload
 		return [
 			'v' => 1,
 			'priority' => $priority,
-			'timestamp' => date('c'),
+			'timestamp' => gmdate('c'),
 			'message' => $message,
 			'events' => [],
 			'extra' => $extra,
@@ -143,7 +143,7 @@ final class Payload
 		return [
 			'v' => 1,
 			'priority' => self::severityPriority((int)($error['type'] ?? E_ERROR)),
-			'timestamp' => date('c'),
+			'timestamp' => gmdate('c'),
 			'message' => $message,
 			'events' => [
 				[
