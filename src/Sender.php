@@ -258,7 +258,7 @@ class Sender
 		$payload = $this->decorate(
 			Payload::fromMessage('Test error from the ovos console WordPress plugin', 3),
 			$this->buildContext());
-			
+		
 		$response = wp_remote_post($this->config->url() . '/api/v1/ingest', [
 			'timeout' => 5,
 			'headers' => [
@@ -309,6 +309,9 @@ class Sender
 		
 		$context = [
 			'dir' => defined('ABSPATH') ? rtrim(ABSPATH, '/\\') : '',
+			// correlates every error of this request in the console — across
+			// services when an inbound traceparent is propagated
+			'traceId' => Trace::id(),
 		];
 		
 		if($isCli)
