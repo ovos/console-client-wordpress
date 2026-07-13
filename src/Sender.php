@@ -1,0 +1,503 @@
+<?php
+declare(strict_types=1);
+
+namespace OvosConsole;
+
+use ErrorException;
+use Throwable;
+
+use function array_slice;
+use function array_values;
+use function count;
+use function curl_exec;
+use function curl_init;
+use function curl_setopt_array;
+use function defined;
+use function error_get_last;
+use function error_reporting;
+use function function_exists;
+use function in_array;
+use function json_encode;
+use function parse_url;
+use function register_shutdown_function;
+use function rtrim;
+use function session_id;
+use function session_status;
+use function set_error_handler;
+use function spl_object_id;
+use function str_replace;
+use function str_starts_with;
+use function strlen;
+use function strpos;
+use function substr;
+
+use const PHP_SESSION_ACTIVE;
+use const PHP_URL_HOST;
+
+/**
+ * Reports collected errors to a central ovos/console instance —
+ * standalone WordPress port of the php-library Console\Sender.
+ *
+ * Fire-and-forget by contract: every public method swallows all
+ * failures and the single HTTP call happens once per request from
+ * the shutdown handler with a hard timeout — the console must never
+ * break or noticeably slow the host site.
+ *
+ * Non-fatal errors are captured via a chained set_error_handler
+ * (error_reporting() and the @ operator are respected, behavior is
+ * never altered); fatals — uncaught exceptions included — via
+ * error_get_last() at shutdown. There is deliberately no
+ * set_exception_handler: replacing it would change WordPress'
+ * fatal handling (recovery mode, display).
+ */
+class Sender
+{
+	protected const int MAX_QUEUE = 100;
+	
+	protected const int MAX_BATCH = 50;
+	
+	protected const int MAX_BODY = 262144;
+	
+	protected const array FATAL_TYPES = [
+		E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR,
+	];
+	
+	/**
+	 * Queued payloads, keyed by spl_object_id for throwables so one
+	 * object is never double-reported
+	 */
+	protected array $queue = [];
+	
+	protected bool $flushing = false;
+	
+	/**
+	 * @var callable|null
+	 */
+	protected $previousErrorHandler = null;
+	
+	public function __construct(
+		protected Config $config,
+	)
+	{
+	}
+	
+	public function register(): void
+	{
+		$this->previousErrorHandler = set_error_handler([$this, 'handleError']);
+		
+		register_shutdown_function([$this, 'handleShutdown']);
+	}
+	
+	public function isEnabled(): bool
+	{
+		return $this->config->enabled()
+			&& $this->config->url() !== ''
+			&& $this->config->apiKey() !== '';
+	}
+	
+	public function captureException(
+		Throwable $event,
+		array $extra = [],
+		?int $priority = null,
+	): static
+	{
+		try
+		{
+			$this->queue[spl_object_id($event)] =
+				Payload::fromThrowable($event, $priority, $extra);
+		}
+		catch(Throwable)
+		{
+			// never break the host site
+		}
+		
+		return $this;
+	}
+	
+	public function captureMessage(
+		string $message,
+		int $priority = 5,
+		array $extra = [],
+	): static
+	{
+		try
+		{
+			$this->queue[] = Payload::fromMessage($message, $priority, $extra);
+		}
+		catch(Throwable)
+		{
+			// never break the host site
+		}
+		
+		return $this;
+	}
+	
+	/**
+	 * set_error_handler callback — captures, then hands over to the
+	 * previous handler (or to PHP's own, by returning false)
+	 */
+	public function handleError(
+		int $severity,
+		string $message,
+		string $file = '',
+		int $line = 0,
+	): bool
+	{
+		try
+		{
+			if((error_reporting() & $severity) !== 0
+				&& Payload::severityPriority($severity) <= $this->config->logLevel()
+				&& count($this->queue) < self::MAX_QUEUE)
+			{
+				$this->captureException(
+					new ErrorException($message, 0, $severity, $file, $line));
+			}
+		}
+		catch(Throwable)
+		{
+			// never break the host site
+		}
+		
+		if($this->previousErrorHandler !== null)
+		{
+			return (bool)($this->previousErrorHandler)($severity, $message, $file, $line);
+		}
+		
+		return false;
+	}
+	
+	public function handleShutdown(): void
+	{
+		try
+		{
+			$error = error_get_last();
+			
+			if($error !== null
+				&& in_array((int)($error['type'] ?? 0), self::FATAL_TYPES, true))
+			{
+				$this->queue[] = Payload::fromFatal($error);
+			}
+		}
+		catch(Throwable)
+		{
+			// never break the host site
+		}
+		
+		$this->flush();
+	}
+	
+	/**
+	 * Builds and posts the batch — called once from the shutdown handler
+	 * after the response went out
+	 */
+	public function flush(): void
+	{
+		if($this->flushing || $this->isEnabled() === false)
+		{
+			return;
+		}
+		
+		$this->flushing = true;
+		
+		try
+		{
+			$logLevel = $this->config->logLevel();
+			$context = null;
+			
+			$errors = [];
+			
+			foreach($this->queue as $payload)
+			{
+				if($payload['priority'] > $logLevel)
+				{
+					continue;
+				}
+				
+				$context ??= $this->buildContext();
+				
+				$errors[] = $this->decorate($payload, $context);
+				
+				if(count($errors) === self::MAX_BATCH)
+				{
+					break;
+				}
+			}
+			
+			if($errors !== [])
+			{
+				$json = $this->encode($errors);
+				
+				while(strlen($json) > self::MAX_BODY && count($errors) > 1)
+				{
+					$errors = array_slice($errors, 0, (int)(count($errors) / 2));
+					$json = $this->encode($errors);
+				}
+				
+				$this->send($json);
+			}
+		}
+		catch(Throwable)
+		{
+			// silence is the contract
+		}
+		finally
+		{
+			$this->queue = [];
+			$this->flushing = false;
+		}
+	}
+	
+	/**
+	 * Posts one synchronous test error and returns the HTTP status —
+	 * used by the settings page, the only non-silent path
+	 */
+	public function sendTest(): int
+	{
+		$payload = $this->decorate(
+			Payload::fromMessage('Test error from the ovos console WordPress plugin', 3),
+			$this->buildContext());
+			
+		$response = wp_remote_post($this->config->url() . '/api/v1/ingest', [
+			'timeout' => 5,
+			'headers' => [
+				'Content-Type' => 'application/json',
+				'X-Console-Key' => $this->config->apiKey(),
+			],
+			'body' => $this->encode([$payload]),
+		]);
+		
+		if(is_wp_error($response))
+		{
+			return 0;
+		}
+		
+		return (int)wp_remote_retrieve_response_code($response);
+	}
+	
+	/**
+	 * Merges context, WP extras and the release label into a payload
+	 */
+	protected function decorate(
+		array $payload,
+		array $context,
+	): array
+	{
+		$payload['type'] = $context['type'];
+		$payload['context'] = $context['context']
+			+ ['extra' => Redactor::scrub($payload['extra']) + $this->buildWpExtra($payload)];
+		unset($payload['extra']);
+		
+		$release = $this->config->release();
+		
+		if($release !== '')
+		{
+			$payload['release'] = $release;
+		}
+		
+		return $payload;
+	}
+	
+	/**
+	 * @return array{type: string, context: array}
+	 */
+	protected function buildContext(): array
+	{
+		$isCli = PHP_SAPI === 'cli' || defined('WP_CLI');
+		
+		$context = [
+			'dir' => defined('ABSPATH') ? rtrim(ABSPATH, '/\\') : '',
+		];
+		
+		if($isCli)
+		{
+			$context['host'] = $this->homeHost();
+			$context['args'] = isset($_SERVER['argv'])
+				? array_values((array)$_SERVER['argv'])
+				: [];
+		}
+		else
+		{
+			$context['host'] = (string)($_SERVER['HTTP_HOST'] ?? $this->homeHost());
+			$context['uri'] = (string)($_SERVER['REQUEST_URI'] ?? '');
+			$context['method'] = (string)($_SERVER['REQUEST_METHOD'] ?? '');
+			$context['referer'] = (string)($_SERVER['HTTP_REFERER'] ?? '');
+			$context['ip'] = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+			$context['ua'] = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
+			
+			if(session_status() === PHP_SESSION_ACTIVE)
+			{
+				$context['sessionId'] = (string)session_id();
+			}
+			
+			if(function_exists('get_current_user_id'))
+			{
+				$userId = (int)get_current_user_id();
+				
+				if($userId > 0)
+				{
+					$context['userId'] = (string)$userId;
+				}
+			}
+			
+			$context['request'] = $this->buildRequest();
+		}
+		
+		return [
+			'type' => $isCli ? 'cli' : 'http',
+			'context' => $context,
+		];
+	}
+	
+	/**
+	 * Request variables, redacted before sending (the console scrubs
+	 * again server-side as a backstop)
+	 */
+	protected function buildRequest(): array
+	{
+		$request = [];
+		
+		if(!empty($_GET))
+		{
+			$request['get'] = Redactor::scrub((array)$_GET);
+		}
+		
+		if(!empty($_POST))
+		{
+			$request['post'] = Redactor::scrub((array)$_POST);
+		}
+		
+		return $request;
+	}
+	
+	/**
+	 * WordPress diagnostics per payload: core version, active theme and
+	 * source attribution — which plugin/theme the error file lives in
+	 */
+	protected function buildWpExtra(
+		array $payload,
+	): array
+	{
+		$extra = [
+			'wpVersion' => (string)($GLOBALS['wp_version'] ?? ''),
+		];
+		
+		if(function_exists('get_stylesheet'))
+		{
+			$extra['theme'] = (string)get_stylesheet();
+		}
+		
+		$source = $this->sourceFor((string)($payload['events'][0]['file'] ?? ''));
+		
+		if($source !== '')
+		{
+			$extra['source'] = $source;
+		}
+		
+		return $extra;
+	}
+	
+	/**
+	 * Attributes an error file to the plugin or theme it lives in
+	 */
+	protected function sourceFor(
+		string $file,
+	): string
+	{
+		if($file === '')
+		{
+			return '';
+		}
+		
+		$file = str_replace('\\', '/', $file);
+		
+		$roots = [
+			'plugin' => defined('WP_PLUGIN_DIR') ? (string)WP_PLUGIN_DIR : '',
+			'mu-plugin' => defined('WPMU_PLUGIN_DIR') ? (string)WPMU_PLUGIN_DIR : '',
+			'theme' => function_exists('get_theme_root') ? (string)get_theme_root() : '',
+		];
+		
+		foreach($roots as $type => $root)
+		{
+			if($root === '')
+			{
+				continue;
+			}
+			
+			$root = rtrim(str_replace('\\', '/', $root), '/') . '/';
+			
+			if(str_starts_with($file, $root))
+			{
+				$segment = substr($file, strlen($root));
+				$slash = strpos($segment, '/');
+				
+				return $type . ':' . ($slash === false ? $segment : substr($segment, 0, $slash));
+			}
+		}
+		
+		return 'core';
+	}
+	
+	protected function homeHost(): string
+	{
+		if(function_exists('home_url') === false)
+		{
+			return '';
+		}
+		
+		$host = parse_url((string)home_url(), PHP_URL_HOST);
+		
+		return $host === false || $host === null ? '' : (string)$host;
+	}
+	
+	protected function encode(
+		array $errors,
+	): string
+	{
+		return (string)json_encode($errors,
+			JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+	}
+	
+	protected function send(
+		string $json,
+	): void
+	{
+		// the response is already sent — release the connection so the
+		// HTTP call is invisible to the end user
+		if(function_exists('fastcgi_finish_request') && PHP_SAPI !== 'cli')
+		{
+			@fastcgi_finish_request();
+		}
+		
+		$endpoint = $this->config->url() . '/api/v1/ingest';
+		
+		if(function_exists('curl_init'))
+		{
+			$handle = curl_init($endpoint);
+			
+			curl_setopt_array($handle, [
+				CURLOPT_POST => true,
+				CURLOPT_POSTFIELDS => $json,
+				CURLOPT_HTTPHEADER => [
+					'Content-Type: application/json',
+					'X-Console-Key: ' . $this->config->apiKey(),
+				],
+				CURLOPT_RETURNTRANSFER => true,
+				CURLOPT_CONNECTTIMEOUT_MS => 300,
+				CURLOPT_TIMEOUT_MS => 1000,
+			]);
+			
+			curl_exec($handle);
+			
+			return;
+		}
+		
+		wp_remote_post($endpoint, [
+			'timeout' => 1,
+			'headers' => [
+				'Content-Type' => 'application/json',
+				'X-Console-Key' => $this->config->apiKey(),
+			],
+			'body' => $json,
+		]);
+	}
+}
