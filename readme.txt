@@ -25,6 +25,10 @@ Configuration lives under Settings → ovos console, or in wp-config.php via `OV
 `define('OVOS_CONSOLE_API_KEY', '...');`
 `define('OVOS_CONSOLE_JS_KEY', '...');`
 
+For a console instance behind a self-signed certificate (intranet setups), TLS verification of the ingest call can be disabled:
+
+`add_filter('ovos_console_sslverify', '__return_false');`
+
 Manual captures from theme or plugin code:
 
 `ovos_console()->captureException($e, ['orderId' => 7]);`

@@ -264,6 +264,7 @@ class Sender
 				'X-Console-Key' => $this->config->apiKey(),
 			],
 			'body' => $this->encode([$payload]),
+			'sslverify' => $this->verifyTls(),
 		]);
 		
 		if(is_wp_error($response))
@@ -457,6 +458,16 @@ class Sender
 			JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
 	}
 	
+	/**
+	 * TLS peer verification for the ingest call — on by default; a console
+	 * behind a self-signed certificate (intranet instances) opts out via
+	 * add_filter('ovos_console_sslverify', '__return_false')
+	 */
+	protected function verifyTls(): bool
+	{
+		return (bool)apply_filters('ovos_console_sslverify', true);
+	}
+	
 	protected function send(
 		string $json,
 	): void
@@ -469,6 +480,7 @@ class Sender
 		}
 		
 		$endpoint = $this->config->url() . '/api/v1/ingest';
+		$verify = $this->verifyTls();
 		
 		if(function_exists('curl_init'))
 		{
@@ -484,6 +496,8 @@ class Sender
 				CURLOPT_RETURNTRANSFER => true,
 				CURLOPT_CONNECTTIMEOUT_MS => 300,
 				CURLOPT_TIMEOUT_MS => 1000,
+				CURLOPT_SSL_VERIFYPEER => $verify,
+				CURLOPT_SSL_VERIFYHOST => $verify ? 2 : 0,
 			]);
 			
 			curl_exec($handle);
@@ -498,6 +512,7 @@ class Sender
 				'X-Console-Key' => $this->config->apiKey(),
 			],
 			'body' => $json,
+			'sslverify' => $verify,
 		]);
 	}
 }
