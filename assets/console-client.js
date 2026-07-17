@@ -1485,10 +1485,10 @@
 		4: 'WARNING', 5: 'NOTICE', 6: 'INFO', 7: 'DEBUG',
 	};
 	
-	/** POST the batch to the collector as one OTLP/JSON logs export —
-		application/json via fetch (sendBeacon cannot carry that type
-		cross-origin), keepalive so a pagehide flush survives */
-	function sendOtlp(batch) {
+	/** POST one OTLP/JSON logs export — application/json via fetch
+		(sendBeacon cannot carry that type cross-origin), keepalive so a
+		pagehide flush survives */
+	function sendOtlp(body) {
 		if (!window.fetch) {
 			return;
 		}
@@ -1498,9 +1498,12 @@
 		}
 		fetch(config.otlp, {
 			method: 'POST',
-			body: JSON.stringify(toOtlp(batch)),
+			body: body,
 			headers: headers,
-			keepalive: true,
+			// the keepalive quota rejects bodies over 64 KiB outright — a
+			// single oversized record sends without it (still delivered from
+			// a live page, lost only when the page unloads mid-send)
+			keepalive: body.length <= 60000,
 		}).catch(function () {});
 	}
 	
@@ -1649,15 +1652,23 @@
 			var batch = queue;
 			queue = [];
 			
+			if (config.otlp) {
+				// trim against the FINAL body: the OTLP envelope inflates
+				// entries well past their report size, and a keepalive fetch
+				// hard-fails over the ~64 KiB quota instead of degrading
+				var otlpBody = JSON.stringify(toOtlp(batch));
+				while (otlpBody.length > config.maxBytes && batch.length > 1) {
+					batch.pop();
+					otlpBody = JSON.stringify(toOtlp(batch));
+				}
+				sendOtlp(otlpBody);
+				return;
+			}
+			
 			var body = JSON.stringify(batch);
 			while (body.length > config.maxBytes && batch.length > 1) {
 				batch.pop();
 				body = JSON.stringify(batch);
-			}
-			
-			if (config.otlp) {
-				sendOtlp(batch);
-				return;
 			}
 			
 			var endpoint = config.url + '/api/v1/ingest/js/' + encodeURIComponent(config.key);
