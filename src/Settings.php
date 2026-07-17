@@ -20,9 +20,9 @@ use function trim;
  */
 class Settings
 {
-	public const string PAGE = 'ovos-console';
+	public const PAGE = 'ovos-console';
 	
-	protected const array LEVELS = [
+	protected const LEVELS = [
 		0 => 'emergency',
 		1 => 'alert',
 		2 => 'critical',

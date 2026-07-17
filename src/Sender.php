@@ -54,13 +54,13 @@ use const PHP_URL_HOST;
  */
 class Sender
 {
-	protected const int MAX_QUEUE = 100;
+	protected const MAX_QUEUE = 100;
 	
-	protected const int MAX_BATCH = 50;
+	protected const MAX_BATCH = 50;
 	
-	protected const int MAX_BODY = 262144;
+	protected const MAX_BODY = 262144;
 	
-	protected const array FATAL_TYPES = [
+	protected const FATAL_TYPES = [
 		E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR,
 	];
 	

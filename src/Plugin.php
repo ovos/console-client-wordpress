@@ -9,7 +9,7 @@ namespace OvosConsole;
  */
 final class Plugin
 {
-	public const string VERSION = '0.2.0';
+	public const VERSION = '0.2.1';
 	
 	protected static ?self $instance = null;
 	

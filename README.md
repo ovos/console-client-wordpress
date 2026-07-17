@@ -9,7 +9,7 @@ Reports errors from a WordPress site to a self-hosted [ovos/console](https://www
 ## Requirements
 
 - WordPress 6.0+
-- PHP 8.3+ (the `Requires PHP` header prevents activation on older hosts)
+- PHP 8.1+ (the `Requires PHP` header prevents activation on older hosts)
 - an ovos/console instance reachable from this site
 
 ## Installation

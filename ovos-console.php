@@ -3,9 +3,9 @@ declare(strict_types=1);
 /**
  * Plugin Name: ovos console
  * Description: Connects this site to an ovos/console error-monitoring instance — PHP and browser JavaScript errors, with grouping, alerting and issue lifecycle handled by the console.
- * Version: 0.2.0
+ * Version: 0.2.1
  * Requires at least: 6.0
- * Requires PHP: 8.3
+ * Requires PHP: 8.1
  * Author: ovos media gmbh
  * Author URI: https://www.ovos.at
  * License: GPL-2.0-or-later
@@ -18,7 +18,7 @@ declare(strict_types=1);
 // if the plugin ended up active regardless
 defined('ABSPATH') || exit;
 
-if(PHP_VERSION_ID < 80300)
+if(PHP_VERSION_ID < 80100)
 {
 	return;
 }

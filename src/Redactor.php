@@ -14,10 +14,10 @@ use function preg_match;
  */
 final class Redactor
 {
-	protected const string PATTERN =
+	protected const PATTERN =
 		'/password|passwd|pwd|pass\d|user_pass|token|secret|authorization|cookie|api[-_]key/i';
 		
-	protected const int MAX_DEPTH = 8;
+	protected const MAX_DEPTH = 8;
 	
 	public static function scrub(
 		array $values,

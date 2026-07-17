@@ -20,9 +20,9 @@ use function trim;
  */
 class Config
 {
-	public const string OPTION = 'ovos_console';
+	public const OPTION = 'ovos_console';
 	
-	public const array DEFAULTS = [
+	public const DEFAULTS = [
 		'enabled' => false,
 		'url' => '',
 		'api_key' => '',
