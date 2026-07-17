@@ -30,6 +30,7 @@ class Config
 		'release' => '',
 		'js_enabled' => true,
 		'js_key' => '',
+		'js_trace' => true,
 		'snapshot' => false,
 		'snapshot_styles' => false,
 		'js_admin' => false,
@@ -106,6 +107,11 @@ class Config
 	public function jsKey(): string
 	{
 		return trim((string)$this->get('js_key'));
+	}
+	
+	public function jsTrace(): bool
+	{
+		return (bool)$this->get('js_trace');
 	}
 	
 	public function snapshot(): bool

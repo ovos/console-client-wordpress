@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.2.1
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -15,7 +15,7 @@ Connects your site to an ovos/console error-monitoring instance — PHP and Java
 This plugin reports errors from your WordPress site to a self-hosted [ovos/console](https://www.ovos.at) instance:
 
 * **PHP errors** — warnings, notices and fatals (uncaught exceptions included) are batched and posted once per request from the shutdown handler, after the response went out. Reporting never blocks or breaks the site: every failure is swallowed, the HTTP call has a hard 1 s timeout.
-* **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite).
+* **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite). Same-origin calls carry a W3C traceparent header, so a failed browser request and the PHP error behind it share one trace id in the console.
 * **Context** — request variables (redacted before sending), logged-in user id, WordPress version, active theme, and source attribution: each error is tagged with the plugin or theme its file lives in.
 
 Configuration lives under Settings → ovos console, or in wp-config.php via `OVOS_CONSOLE_*` constants (which lock the corresponding UI field — handy for deploy-time configuration):
@@ -41,6 +41,10 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.3.0 =
+* Browser-side trace correlation: the bundled client now sends a W3C traceparent header on the page's same-origin fetch/XHR calls, so a failed browser request and the PHP error behind it share one trace id in the console (completes the server half shipped in 0.2.0). New "Trace correlation" setting (on by default, `OVOS_CONSOLE_JS_TRACE` constant) to disable it if a firewall rejects the header.
+* Bundled console-client.js updated: an app-set traceparent (own OpenTelemetry SDK) is honored, fetch/XHR breadcrumbs carry the trace id of each call.
 
 = 0.2.1 =
 * Lowered the PHP requirement from 8.3 to 8.1 — no functional changes.

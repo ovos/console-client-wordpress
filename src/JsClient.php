@@ -62,6 +62,12 @@ class JsClient
 			$options['release'] = $this->config->release();
 		}
 		
+		// the client defaults to trace: true — only the opt-out is emitted
+		if($this->config->jsTrace() === false)
+		{
+			$options['trace'] = false;
+		}
+		
 		if($this->config->snapshot())
 		{
 			// masked DOM snapshot with the first error per page load

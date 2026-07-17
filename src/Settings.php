@@ -100,6 +100,7 @@ class Settings
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
 			'js_enabled' => ($input['js_enabled'] ?? '') === '1',
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
+			'js_trace' => ($input['js_trace'] ?? '') === '1',
 			'snapshot' => ($input['snapshot'] ?? '') === '1',
 			'snapshot_styles' => ($input['snapshot_styles'] ?? '') === '1',
 			'js_admin' => ($input['js_admin'] ?? '') === '1',
@@ -166,6 +167,9 @@ class Settings
 		$this->inputField('js_key',
 			__('JS key', 'ovos-console'), 'text', '',
 			__('The project\'s public js_key (distinct from the secret API key).', 'ovos-console'));
+		$this->checkboxField('js_trace',
+			__('Trace correlation', 'ovos-console'),
+			__('Send a W3C traceparent header on the page\'s same-origin fetch/XHR calls, so browser and PHP errors of the same request share a trace id in the console. Disable if a firewall or security plugin rejects the extra request header.', 'ovos-console'));
 		$this->checkboxField('snapshot',
 			__('DOM snapshot', 'ovos-console'),
 			__('Upload a masked DOM snapshot with the first error per page load (replay-lite). Input values and scripts are stripped in the browser before upload.', 'ovos-console'));

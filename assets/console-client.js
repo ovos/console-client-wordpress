@@ -13,7 +13,15 @@
  *   </script>
  *
  * Further options (all optional): breadcrumbs (true), maxBreadcrumbs (20),
- * instrumentFetch (true), instrumentXhr (true), reportResourceErrors
+ * instrumentFetch (true), instrumentXhr (true), trace (true — send a W3C
+ * traceparent header on the page's same-origin fetch/XHR calls, so a
+ * backend sender that honors it (php-library's Console\Sender does)
+ * reports the same trace id and frontend + backend errors of one request
+ * correlate in the console; failed-request reports carry the id as
+ * traceId, fetch/xhr breadcrumbs carry it too), traceOrigins (null —
+ * extra origins to propagate to, string prefixes or RegExp; traceparent
+ * is not CORS-safelisted, so a listed origin's server must allow the
+ * header via Access-Control-Allow-Headers), reportResourceErrors
  * (false — report same-origin <script> load failures as errors),
  * reportAborts (false — AbortError rejections are deliberate cancels),
  * scrub (RegExp[] applied to urls/referrers on top of the default
@@ -82,6 +90,8 @@
 		maxBreadcrumbs: 20,
 		instrumentFetch: true,
 		instrumentXhr: true,
+		trace: true,        // traceparent on same-origin fetch/XHR (backend correlation)
+		traceOrigins: null, // extra origins to trace (string prefixes or RegExp)
 		reportResourceErrors: false,
 		reportAborts: false,
 		scrub: null,
@@ -285,6 +295,11 @@
 		
 		if (config.release) {
 			entry.release = truncate(config.release, 64);
+		}
+		// a failed request's trace id — indexed server-side, links the report
+		// to the backend errors of the same request
+		if (error.request && error.request.traceId) {
+			entry.traceId = error.request.traceId;
 		}
 		
 		shrink(entry);
@@ -554,7 +569,24 @@
 					}
 				} catch (ignored) {}
 				
-				var result = original.apply(this, args);
+				// backend correlation: hand the request a traceparent the
+				// server-side sender picks up; any hiccup while patching the
+				// args falls back to the untouched call
+				var patched = null;
+				try {
+					if (info && config && config.trace && traceEligible(info.url)) {
+						patched = injectTrace(args[0], args[1]);
+						if (patched) {
+							info.traceId = patched.traceId;
+						}
+					}
+				} catch (ignored) {
+					patched = null;
+				}
+				
+				var result = patched
+					? original.call(this, patched.input, patched.init)
+					: original.apply(this, args);
 				if (!info || !result || !result.then) {
 					return result;
 				}
@@ -585,6 +617,7 @@
 			
 			var open = proto.open;
 			var send = proto.send;
+			var setHeader = proto.setRequestHeader;
 			
 			proto.open = function (method, url) {
 				try {
@@ -597,19 +630,49 @@
 			};
 			proto.open.__ovosConsole = true;
 			
+			// remember an app-set traceparent: XHR COMBINES repeated headers,
+			// so injecting a second value would corrupt the app's own tracing
+			proto.setRequestHeader = function (name, value) {
+				try {
+					if (this.__ovosConsole && String(name).toLowerCase() === 'traceparent') {
+						this.__ovosConsole.traceparent = String(value || '');
+					}
+				} catch (ignored) {}
+				return setHeader.apply(this, arguments);
+			};
+			proto.setRequestHeader.__ovosConsole = true;
+			
 			proto.send = function () {
 				var xhr = this;
 				try {
 					var info = xhr.__ovosConsole;
 					if (info && !(config && config.url && info.url.indexOf(config.url) === 0)) {
 						info.started = sinceLoad();
+						if (config.trace && traceEligible(info.url)) {
+							if (info.traceparent) {
+								// the app's own tracer decided — reuse its id
+								var parsed = /^[0-9a-f]{2}-([0-9a-f]{32})-/.exec(info.traceparent.toLowerCase());
+								info.traceId = parsed ? parsed[1] : undefined;
+							} else {
+								try {
+									var traceId = randomHex(32);
+									setHeader.call(xhr, 'traceparent',
+										'00-' + traceId + '-' + randomHex(16) + '-00');
+									info.traceId = traceId;
+								} catch (ignored) {}
+							}
+						}
 						xhr.addEventListener('loadend', function () {
-							crumb('xhr', {
+							var data = {
 								method: info.method,
 								url: scrub(info.url, 200),
 								status: xhr.status,
 								durMs: sinceLoad() - info.started,
-							});
+							};
+							if (info.traceId) {
+								data.traceId = info.traceId;
+							}
+							crumb('xhr', data);
 						});
 					}
 				} catch (ignored) {}
@@ -625,12 +688,16 @@
 			
 			// method/url/status only — never the response body: it routinely
 			// carries tokens/PII and scrub() only redacts url query params
-			crumb('fetch', {
+			var data = {
 				method: info.method,
 				url: scrub(info.url, 200),
 				status: status,
 				durMs: info.durationMs,
-			});
+			};
+			if (info.traceId) {
+				data.traceId = info.traceId;
+			}
+			crumb('fetch', data);
 		} catch (ignored) {}
 	}
 	
@@ -645,6 +712,9 @@
 					durationMs: info.durationMs || 0,
 					callStack: info.stack,
 				};
+				if (info.traceId) {
+					error.__ovosConsoleRequest.traceId = info.traceId;
+				}
 			}
 		} catch (ignored) {}
 	}
@@ -1225,6 +1295,137 @@
 			id += Math.random().toString(16).slice(2);
 		}
 		return id.slice(0, 8);
+	}
+	
+	/** length hex chars; all-zero is forbidden for W3C trace ids */
+	function randomHex(length) {
+		var hex = '';
+		try {
+			if (window.crypto && crypto.getRandomValues) {
+				var bytes = new Uint8Array(length / 2);
+				crypto.getRandomValues(bytes);
+				for (var i = 0; i < bytes.length; i++) {
+					hex += (bytes[i] + 256).toString(16).slice(1);
+				}
+			}
+		} catch (ignored) {
+			hex = '';
+		}
+		while (hex.length < length) {
+			hex += Math.random().toString(16).slice(2);
+		}
+		hex = hex.slice(0, length);
+		return /[1-9a-f]/.test(hex) ? hex : '1' + hex.slice(1);
+	}
+	
+	/** should this request carry a traceparent? Same-origin always (no CORS
+		involved); other hosts only when listed in traceOrigins, because the
+		header is not CORS-safelisted — it would add preflights the target
+		must answer with Access-Control-Allow-Headers: traceparent */
+	function traceEligible(url) {
+		try {
+			var a = document.createElement('a');
+			a.href = url;
+			// the scheme must match too: http->https on the same host is
+			// cross-origin, and the header would force a preflight there
+			if (!a.host || (a.host === location.host
+				&& (!a.protocol || a.protocol === location.protocol))) {
+				return true;
+			}
+			var origins = config.traceOrigins;
+			for (var i = 0; origins && i < origins.length; i++) {
+				var origin = origins[i];
+				if (origin instanceof RegExp ? origin.test(url) : String(url).indexOf(origin) === 0) {
+					return true;
+				}
+			}
+		} catch (ignored) {}
+		return false;
+	}
+	
+	/** fetch args with a traceparent header added — {input, init, traceId},
+		or null when the header cannot be placed safely (the caller then
+		sends the request untouched). An app-set traceparent (its own OTEL
+		SDK) is honored: reused for the report, never overwritten. */
+	function injectTrace(input, init) {
+		var existing = headerValue(init && init.headers, 'traceparent')
+			|| (input && typeof input === 'object' && input.headers
+				&& typeof input.headers.get === 'function'
+				&& input.headers.get('traceparent')) || '';
+		if (existing) {
+			var parsed = /^[0-9a-f]{2}-([0-9a-f]{32})-/.exec(String(existing).toLowerCase());
+			return parsed ? {input: input, init: init, traceId: parsed[1]} : null;
+		}
+		
+		var traceId = randomHex(32);
+		var header = '00-' + traceId + '-' + randomHex(16) + '-00';
+		
+		var patched = {};
+		for (var key in init || {}) {
+			patched[key] = init[key];
+		}
+		
+		if (init && init.headers) {
+			patched.headers = withHeader(init.headers, header);
+		} else if (input && typeof input === 'object' && input.headers) {
+			// init.headers REPLACES a Request's own headers wholesale —
+			// copy them all before adding ours
+			patched.headers = withHeader(input.headers, header);
+		} else {
+			patched.headers = {traceparent: header};
+		}
+		
+		return patched.headers ? {input: input, init: patched, traceId: traceId} : null;
+	}
+	
+	/** copy of a HeadersInit with traceparent set — Headers instance, entry
+		array or plain object; null for shapes we do not understand */
+	function withHeader(headers, value) {
+		try {
+			if (typeof Headers === 'function' && headers instanceof Headers) {
+				var copy = new Headers(headers);
+				copy.set('traceparent', value);
+				return copy;
+			}
+			if (Object.prototype.toString.call(headers) === '[object Array]') {
+				return headers.concat([['traceparent', value]]);
+			}
+			if (headers && typeof headers === 'object' && typeof headers.get !== 'function') {
+				var plain = {};
+				for (var key in headers) {
+					plain[key] = headers[key];
+				}
+				plain.traceparent = value;
+				return plain;
+			}
+		} catch (ignored) {}
+		return null;
+	}
+	
+	/** case-insensitive header lookup across the HeadersInit shapes */
+	function headerValue(headers, name) {
+		try {
+			if (!headers) {
+				return '';
+			}
+			if (typeof headers.get === 'function') {
+				return String(headers.get(name) || '');
+			}
+			if (Object.prototype.toString.call(headers) === '[object Array]') {
+				for (var i = 0; i < headers.length; i++) {
+					if (String(headers[i] && headers[i][0]).toLowerCase() === name) {
+						return String(headers[i][1] || '');
+					}
+				}
+				return '';
+			}
+			for (var key in headers) {
+				if (key.toLowerCase() === name) {
+					return String(headers[key] || '');
+				}
+			}
+		} catch (ignored) {}
+		return '';
 	}
 	
 	/** drop breadcrumbs before the batch trim ever has to drop whole reports */
