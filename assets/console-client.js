@@ -21,7 +21,14 @@
  * traceId, fetch/xhr breadcrumbs carry it too), traceOrigins (null —
  * extra origins to propagate to, string prefixes or RegExp; traceparent
  * is not CORS-safelisted, so a listed origin's server must allow the
- * header via Access-Control-Allow-Headers), reportResourceErrors
+ * header via Access-Control-Allow-Headers), otlp ('' — an OpenTelemetry
+ * Collector's OTLP/HTTP logs endpoint, e.g. https://collector:4318/v1/logs;
+ * when set, reports are sent there as OTLP/JSON log records instead of to
+ * the console's js endpoint — a webjs-tagged resource, so a console fed by
+ * the collector still ingests them as type js. url/key become optional
+ * (only snapshots still need them); the export uses fetch + CORS, so the
+ * collector must allow the page's origin. otlpHeaders (null — extra
+ * request headers for that endpoint, e.g. auth)), reportResourceErrors
  * (false — report same-origin <script> load failures as errors),
  * reportAborts (false — AbortError rejections are deliberate cancels),
  * scrub (RegExp[] applied to urls/referrers on top of the default
@@ -92,6 +99,8 @@
 		instrumentXhr: true,
 		trace: true,        // traceparent on same-origin fetch/XHR (backend correlation)
 		traceOrigins: null, // extra origins to trace (string prefixes or RegExp)
+		otlp: '',           // OTLP/HTTP logs endpoint — reports go to a collector instead
+		otlpHeaders: null,  // extra headers for the OTLP endpoint (e.g. auth)
 		reportResourceErrors: false,
 		reportAborts: false,
 		scrub: null,
@@ -111,7 +120,9 @@
 				config[key] = options && options[key] !== undefined ? options[key] : DEFAULTS[key];
 			}
 			config.url = String(config.url || '').replace(/\/+$/, '');
-			if (!config.url || !config.key) {
+			config.otlp = String(config.otlp || '').replace(/\/+$/, '');
+			// OTLP mode stands alone; the console transport needs url + key
+			if (config.otlp === '' && (!config.url || !config.key)) {
 				config = null;
 				return;
 			}
@@ -563,8 +574,8 @@
 						stack: callSite(),
 						started: sinceLoad(),
 					};
-					// never trace our own beacon traffic
-					if (config && config.url && info.url.indexOf(config.url) === 0) {
+					// never trace our own beacon/export traffic
+					if (isOwnTraffic(info.url)) {
 						info = null;
 					}
 				} catch (ignored) {}
@@ -646,7 +657,7 @@
 				var xhr = this;
 				try {
 					var info = xhr.__ovosConsole;
-					if (info && !(config && config.url && info.url.indexOf(config.url) === 0)) {
+					if (info && isOwnTraffic(info.url) === false) {
 						info.started = sinceLoad();
 						if (config.trace && traceEligible(info.url)) {
 							if (info.traceparent) {
@@ -740,7 +751,10 @@
 	 */
 	function maybeSnapshot(entry) {
 		try {
-			if (!config.snapshot || snapshotsSent >= config.snapshotPerPage
+			// snapshots upload to the console's origin-gated endpoint — an
+			// OTLP-only setup (no url/key) has nowhere to put them
+			if (!config.snapshot || !config.url || !config.key
+				|| snapshotsSent >= config.snapshotPerPage
 				|| !document.documentElement || !document.documentElement.cloneNode
 				|| !window.fetch || !window.Blob) {
 				return;
@@ -1318,6 +1332,23 @@
 		return /[1-9a-f]/.test(hex) ? hex : '1' + hex.slice(1);
 	}
 	
+	/** the client's own beacon/export requests — never breadcrumbed,
+		never tagged, never traced (a reporting loop must be impossible) */
+	function isOwnTraffic(url) {
+		try {
+			if (!config) {
+				return false;
+			}
+			if (config.url && url.indexOf(config.url) === 0) {
+				return true;
+			}
+			if (config.otlp && url.indexOf(config.otlp) === 0) {
+				return true;
+			}
+		} catch (ignored) {}
+		return false;
+	}
+	
 	/** should this request carry a traceparent? Same-origin always (no CORS
 		involved); other hosts only when listed in traceOrigins, because the
 		header is not CORS-safelisted — it would add preflights the target
@@ -1451,6 +1482,166 @@
 		}
 	}
 	
+	// syslog priority -> OTLP severityNumber band (higher = more severe
+	// there); the console maps the bands back to 2/3/4/6/7 — 0/1 collapse
+	// into critical and 5 into info on the round trip
+	var OTLP_SEVERITY = {0: 21, 1: 21, 2: 21, 3: 17, 4: 13, 5: 9, 6: 9, 7: 5};
+	var OTLP_SEVERITY_TEXT = {
+		0: 'EMERGENCY', 1: 'ALERT', 2: 'CRITICAL', 3: 'ERROR',
+		4: 'WARNING', 5: 'NOTICE', 6: 'INFO', 7: 'DEBUG',
+	};
+	
+	/** POST the batch to the collector as one OTLP/JSON logs export —
+		application/json via fetch (sendBeacon cannot carry that type
+		cross-origin), keepalive so a pagehide flush survives */
+	function sendOtlp(batch) {
+		if (!window.fetch) {
+			return;
+		}
+		var headers = {'Content-Type': 'application/json'};
+		for (var key in config.otlpHeaders || {}) {
+			headers[key] = String(config.otlpHeaders[key]);
+		}
+		fetch(config.otlp, {
+			method: 'POST',
+			body: JSON.stringify(toOtlp(batch)),
+			headers: headers,
+			keepalive: true,
+		}).catch(function () {});
+	}
+	
+	/** report entries -> ExportLogsServiceRequest. The webjs-tagged
+		resource is what makes a console behind the collector ingest these
+		as type js (browser grouping, page host, extra.col). */
+	function toOtlp(batch) {
+		var records = [];
+		for (var i = 0; i < batch.length; i++) {
+			records.push(otlpRecord(batch[i]));
+		}
+		
+		var resource = [
+			attr('telemetry.sdk.name', {stringValue: 'ovos-console-client'}),
+			attr('telemetry.sdk.language', {stringValue: 'webjs'}),
+			attr('service.name', {stringValue: String(location.host || '')}),
+		];
+		if (config.release) {
+			resource.push(attr('service.version', {stringValue: truncate(config.release, 64)}));
+		}
+		
+		return {resourceLogs: [{
+			resource: {attributes: resource},
+			scopeLogs: [{
+				scope: {name: 'ovos-console-client'},
+				logRecords: records,
+			}],
+		}]};
+	}
+	
+	function otlpRecord(entry) {
+		var attributes = [
+			attr('exception.type', {stringValue: entry.name || 'Error'}),
+			attr('url.full', {stringValue: entry.url}),
+		];
+		if (entry.stack) {
+			attributes.push(attr('exception.stacktrace', {stringValue: entry.stack}));
+		}
+		if (entry.file) {
+			attributes.push(attr('code.file.path', {stringValue: entry.file}));
+		}
+		if (entry.line) {
+			attributes.push(attr('code.line.number', {intValue: String(entry.line)}));
+		}
+		if (entry.col) {
+			attributes.push(attr('code.column.number', {intValue: String(entry.col)}));
+		}
+		try {
+			if (navigator.userAgent) {
+				attributes.push(attr('user_agent.original', {stringValue: truncate(navigator.userAgent, 500)}));
+			}
+		} catch (ignored) {}
+		if (entry.count > 1) {
+			// the js path's dedup counter slot (extra.client_count)
+			attributes.push(attr('client_count', {intValue: String(entry.count)}));
+		}
+		
+		// extra fields become one attribute each — unmapped attributes spill
+		// into the console's context.extra verbatim, so pageId, breadcrumbs,
+		// request and snapshotId land exactly where the js endpoint puts them
+		for (var key in entry.extra || {}) {
+			var value = anyValue(entry.extra[key], 0);
+			if (value) {
+				attributes.push(attr(key, value));
+			}
+		}
+		
+		var record = {
+			// string math — ms * 1e6 overflows JS integer precision
+			timeUnixNano: String(entry.timestamp) + '000000',
+			severityNumber: OTLP_SEVERITY[entry.priority] || 17,
+			severityText: OTLP_SEVERITY_TEXT[entry.priority] || 'ERROR',
+			body: {stringValue: entry.message},
+			attributes: attributes,
+		};
+		if (entry.traceId) {
+			record.traceId = entry.traceId;
+		}
+		
+		return record;
+	}
+	
+	function attr(key, value) {
+		return {key: key, value: value};
+	}
+	
+	/** JS value -> OTLP AnyValue (depth-capped; unsupported shapes and
+		empty wrappers return null and the attribute is skipped) */
+	function anyValue(value, depth) {
+		try {
+			if (value === null || value === undefined) {
+				return null;
+			}
+			var type = typeof value;
+			if (type === 'string') {
+				return {stringValue: truncate(value, 4000)};
+			}
+			if (type === 'boolean') {
+				return {boolValue: value};
+			}
+			if (type === 'number') {
+				if (!isFinite(value)) {
+					return {stringValue: String(value)};
+				}
+				return value % 1 === 0 && Math.abs(value) <= 9007199254740991
+					? {intValue: String(value)}
+					: {doubleValue: value};
+			}
+			if (depth >= 4) {
+				return {stringValue: truncate(String(value), 200)};
+			}
+			if (Object.prototype.toString.call(value) === '[object Array]') {
+				var values = [];
+				for (var i = 0; i < value.length && i < 50; i++) {
+					var item = anyValue(value[i], depth + 1);
+					if (item) {
+						values.push(item);
+					}
+				}
+				return {arrayValue: {values: values}};
+			}
+			if (type === 'object') {
+				var pairs = [];
+				for (var key in value) {
+					var wrapped = anyValue(value[key], depth + 1);
+					if (wrapped) {
+						pairs.push({key: key, value: wrapped});
+					}
+				}
+				return {kvlistValue: {values: pairs}};
+			}
+		} catch (ignored) {}
+		return null;
+	}
+	
 	function flush() {
 		try {
 			clearTimeout(flushTimer);
@@ -1467,6 +1658,11 @@
 			while (body.length > config.maxBytes && batch.length > 1) {
 				batch.pop();
 				body = JSON.stringify(batch);
+			}
+			
+			if (config.otlp) {
+				sendOtlp(batch);
+				return;
 			}
 			
 			var endpoint = config.url + '/api/v1/ingest/js/' + encodeURIComponent(config.key);

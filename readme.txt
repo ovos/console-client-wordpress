@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.3.0
+Stable tag: 0.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,9 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.3.1 =
+* Bundled console-client.js updated in lockstep with the console (adds an OTLP collector export capability; unused by the plugin — no settings changed).
 
 = 0.3.0 =
 * Browser-side trace correlation: the bundled client now sends a W3C traceparent header on the page's same-origin fetch/XHR calls, so a failed browser request and the PHP error behind it share one trace id in the console (completes the server half shipped in 0.2.0). New "Trace correlation" setting (on by default, `OVOS_CONSOLE_JS_TRACE` constant) to disable it if a firewall rejects the header.
