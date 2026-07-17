@@ -12,33 +12,39 @@
  *     });
  *   </script>
  *
- * Further options (all optional): breadcrumbs (true), maxBreadcrumbs (20),
- * instrumentFetch (true), instrumentXhr (true), trace (true — send a W3C
- * traceparent header on the page's same-origin fetch/XHR calls, so a
- * backend sender that honors it (php-library's Console\Sender does)
- * reports the same trace id and frontend + backend errors of one request
- * correlate in the console; failed-request reports carry the id as
- * traceId, fetch/xhr breadcrumbs carry it too), traceOrigins (null —
- * extra origins to propagate to, string prefixes or RegExp; traceparent
- * is not CORS-safelisted, so a listed origin's server must allow the
- * header via Access-Control-Allow-Headers), otlp ('' — an OpenTelemetry
- * Collector's OTLP/HTTP logs endpoint, e.g. https://collector:4318/v1/logs;
- * when set, reports are sent there as OTLP/JSON log records instead of to
- * the console's js endpoint — a webjs-tagged resource, so a console fed by
- * the collector still ingests them as type js. url/key become optional
- * (only snapshots still need them); the export uses fetch + CORS, so the
- * collector must allow the page's origin. otlpHeaders (null — extra
- * request headers for that endpoint, e.g. auth)), reportResourceErrors
- * (false — report same-origin <script> load failures as errors),
- * reportAborts (false — AbortError rejections are deliberate cancels),
- * scrub (RegExp[] applied to urls/referrers on top of the default
- * sensitive-query-param redaction), snapshot (false — upload a masked
- * DOM snapshot with the first error per page load; snapshotPerPage,
- * snapshotMask: [selectors], snapshotMaxBytes tune it; snapshotStyles
- * (false) inlines the page's styling — stylesheets (same-origin via the
- * CSSOM, cross-origin via CORS fetch), expanded @imports, CSSOM-injected
- * and adopted rules — so the snapshot renders styled in the viewer,
- * snapshotStyleMaxBytes caps how much CSS that may add).
+ * Further options (all optional), by feature:
+ *
+ * - Filtering: maxErrors (10 unique per page load), ignore (RegExp[]
+ *   matched against messages), reportResourceErrors (false — report
+ *   same-origin <script> load failures as errors), reportAborts (false —
+ *   AbortError rejections are deliberate cancels), scrub (RegExp[]
+ *   applied to urls/referrers on top of the default sensitive-query-param
+ *   redaction).
+ * - Instrumentation: breadcrumbs (true), maxBreadcrumbs (20),
+ *   instrumentFetch (true), instrumentXhr (true).
+ * - Trace correlation: trace (true — send a W3C traceparent header on the
+ *   page's same-origin fetch/XHR calls, so a backend sender that honors
+ *   it (php-library's Console\Sender does) reports the same trace id and
+ *   frontend + backend errors of one request correlate in the console;
+ *   failed-request reports carry the id as traceId, fetch/xhr
+ *   breadcrumbs too), traceOrigins (null — extra origins to propagate
+ *   to, string prefixes or RegExp; traceparent is not CORS-safelisted,
+ *   so a listed origin must allow it via Access-Control-Allow-Headers).
+ * - OTLP export: otlp ('' — an OpenTelemetry Collector's OTLP/HTTP logs
+ *   endpoint, e.g. https://collector:4318/v1/logs; when set, reports are
+ *   sent there as OTLP/JSON log records instead of to the console's js
+ *   endpoint — a webjs-tagged resource, so a console fed by the
+ *   collector still ingests them as type js; url/key become optional,
+ *   only snapshots still need them; the export uses fetch + CORS, so the
+ *   collector must allow the page's origin), otlpHeaders (null — extra
+ *   request headers for that endpoint, e.g. auth).
+ * - DOM snapshots: snapshot (false — upload a masked snapshot with the
+ *   first error per page load), snapshotPerPage (1), snapshotMask
+ *   ([selectors] to blank, PII areas), snapshotMaxBytes, snapshotStyles
+ *   (false — inline the page's styling: same-origin sheets via the
+ *   CSSOM, cross-origin via CORS fetch, expanded @imports and
+ *   CSSOM-injected/adopted rules, so the snapshot renders styled in the
+ *   viewer), snapshotStyleMaxBytes (raw-CSS budget for that).
  *
  * Captures window "error" and "unhandledrejection" events; duplicates
  * within a page load are counted, not re-sent. Batches are flushed
@@ -127,7 +133,7 @@
 				return;
 			}
 			
-			pageId = randomId();
+			pageId = randomHex(8);
 			
 			window.addEventListener('error', onError);
 			window.addEventListener('unhandledrejection', onRejection);
@@ -167,9 +173,9 @@
 				message: event.message,
 				name: event.error && event.error.name || 'Error',
 				stack: event.error && event.error.stack || '',
-				file: event.filename || '',
-				line: event.lineno || 0,
-				col: event.colno || 0,
+				file: event.filename,
+				line: event.lineno,
+				col: event.colno,
 				priority: 3,
 				cause: causeChain(event.error),
 			});
@@ -196,8 +202,6 @@
 				// into one site-wide issue; Safari has no stack here, Chrome's
 				// points at internals, neither groups usefully
 				file: request ? urlPath(request.url) : '',
-				line: 0,
-				col: 0,
 				priority: 3,
 				request: request,
 				cause: causeChain(reason),
@@ -227,10 +231,7 @@
 				report({
 					message: 'script failed to load: ' + scrub(url, 300),
 					name: 'ResourceError',
-					stack: '',
 					file: urlPath(url),
-					line: 0,
-					col: 0,
 					priority: 3,
 				});
 			}
@@ -245,8 +246,6 @@
 				name: error && error.name || 'Error',
 				stack: error && error.stack || '',
 				file: request ? urlPath(request.url) : '',
-				line: 0,
-				col: 0,
 				priority: priority === undefined ? 3 : priority,
 				extra: extra,
 				request: request,
@@ -260,10 +259,6 @@
 			report({
 				message: String(message),
 				name: 'Message',
-				stack: '',
-				file: '',
-				line: 0,
-				col: 0,
 				priority: priority === undefined ? 5 : priority,
 				extra: extra,
 			});
@@ -277,6 +272,12 @@
 		if (isIgnored(error.message)) {
 			return;
 		}
+		
+		// producers may omit what they do not have
+		error.stack = error.stack || '';
+		error.file = error.file || '';
+		error.line = error.line || 0;
+		error.col = error.col || 0;
 		
 		var key = [error.message, error.file, error.line, error.col].join('|');
 		
@@ -432,7 +433,7 @@
 	function crumb(type, data) {
 		try {
 			if (!config || !config.breadcrumbs) {
-				return null;
+				return;
 			}
 			
 			var entry = {t: sinceLoad(), type: type};
@@ -446,10 +447,7 @@
 			if (breadcrumbs.length > config.maxBreadcrumbs) {
 				breadcrumbs.shift();
 			}
-			return entry;
-		} catch (ignored) {
-			return null;
-		}
+		} catch (ignored) {}
 	}
 	
 	function instrumentClicks() {
@@ -662,28 +660,17 @@
 						if (config.trace && traceEligible(info.url)) {
 							if (info.traceparent) {
 								// the app's own tracer decided — reuse its id
-								var parsed = /^[0-9a-f]{2}-([0-9a-f]{32})-/.exec(info.traceparent.toLowerCase());
-								info.traceId = parsed ? parsed[1] : undefined;
+								info.traceId = traceparentId(info.traceparent);
 							} else {
 								try {
-									var traceId = randomHex(32);
-									setHeader.call(xhr, 'traceparent',
-										'00-' + traceId + '-' + randomHex(16) + '-00');
-									info.traceId = traceId;
+									var trace = newTraceparent();
+									setHeader.call(xhr, 'traceparent', trace.header);
+									info.traceId = trace.traceId;
 								} catch (ignored) {}
 							}
 						}
 						xhr.addEventListener('loadend', function () {
-							var data = {
-								method: info.method,
-								url: scrub(info.url, 200),
-								status: xhr.status,
-								durMs: sinceLoad() - info.started,
-							};
-							if (info.traceId) {
-								data.traceId = info.traceId;
-							}
-							crumb('xhr', data);
+							requestCrumb('xhr', info, xhr.status, sinceLoad() - info.started);
 						});
 					}
 				} catch (ignored) {}
@@ -696,20 +683,24 @@
 		try {
 			info.status = status;
 			info.durationMs = sinceLoad() - info.started;
-			
-			// method/url/status only — never the response body: it routinely
-			// carries tokens/PII and scrub() only redacts url query params
-			var data = {
-				method: info.method,
-				url: scrub(info.url, 200),
-				status: status,
-				durMs: info.durationMs,
-			};
-			if (info.traceId) {
-				data.traceId = info.traceId;
-			}
-			crumb('fetch', data);
+			requestCrumb('fetch', info, status, info.durationMs);
 		} catch (ignored) {}
+	}
+	
+	/** the fetch/xhr trail entry — method/url/status only, never the
+		response body: it routinely carries tokens/PII and scrub() only
+		redacts url query params */
+	function requestCrumb(type, info, status, durMs) {
+		var data = {
+			method: info.method,
+			url: scrub(info.url, 200),
+			status: status,
+			durMs: durMs,
+		};
+		if (info.traceId) {
+			data.traceId = info.traceId;
+		}
+		crumb(type, data);
 	}
 	
 	/** attach the request to the error object the rejection will surface */
@@ -761,7 +752,7 @@
 			}
 			snapshotsSent++;
 			
-			var id = (randomId() + randomId()).slice(0, 16);
+			var id = randomHex(16);
 			// serialization must never slow the error path — defer it
 			setTimeout(function () {
 				captureSnapshot(id, entry);
@@ -1303,14 +1294,6 @@
 		return Date.now() - loadStart;
 	}
 	
-	function randomId() {
-		var id = '';
-		while (id.length < 8) {
-			id += Math.random().toString(16).slice(2);
-		}
-		return id.slice(0, 8);
-	}
-	
 	/** length hex chars; all-zero is forbidden for W3C trace ids */
 	function randomHex(length) {
 		var hex = '';
@@ -1330,6 +1313,18 @@
 		}
 		hex = hex.slice(0, length);
 		return /[1-9a-f]/.test(hex) ? hex : '1' + hex.slice(1);
+	}
+	
+	/** a fresh W3C traceparent — flags 00: we correlate, we do not trace */
+	function newTraceparent() {
+		var traceId = randomHex(32);
+		return {header: '00-' + traceId + '-' + randomHex(16) + '-00', traceId: traceId};
+	}
+	
+	/** the 32-hex trace id of a traceparent header, '' when malformed */
+	function traceparentId(header) {
+		var parsed = /^[0-9a-f]{2}-([0-9a-f]{32})-/.exec(String(header || '').toLowerCase());
+		return parsed ? parsed[1] : '';
 	}
 	
 	/** the client's own beacon/export requests — never breadcrumbed,
@@ -1384,12 +1379,11 @@
 				&& typeof input.headers.get === 'function'
 				&& input.headers.get('traceparent')) || '';
 		if (existing) {
-			var parsed = /^[0-9a-f]{2}-([0-9a-f]{32})-/.exec(String(existing).toLowerCase());
-			return parsed ? {input: input, init: init, traceId: parsed[1]} : null;
+			var existingId = traceparentId(existing);
+			return existingId ? {input: input, init: init, traceId: existingId} : null;
 		}
 		
-		var traceId = randomHex(32);
-		var header = '00-' + traceId + '-' + randomHex(16) + '-00';
+		var trace = newTraceparent();
 		
 		var patched = {};
 		for (var key in init || {}) {
@@ -1397,16 +1391,16 @@
 		}
 		
 		if (init && init.headers) {
-			patched.headers = withHeader(init.headers, header);
+			patched.headers = withHeader(init.headers, trace.header);
 		} else if (input && typeof input === 'object' && input.headers) {
 			// init.headers REPLACES a Request's own headers wholesale —
 			// copy them all before adding ours
-			patched.headers = withHeader(input.headers, header);
+			patched.headers = withHeader(input.headers, trace.header);
 		} else {
-			patched.headers = {traceparent: header};
+			patched.headers = {traceparent: trace.header};
 		}
 		
-		return patched.headers ? {input: input, init: patched, traceId: traceId} : null;
+		return patched.headers ? {input: input, init: patched, traceId: trace.traceId} : null;
 	}
 	
 	/** copy of a HeadersInit with traceparent set — Headers instance, entry
@@ -1418,7 +1412,7 @@
 				copy.set('traceparent', value);
 				return copy;
 			}
-			if (Object.prototype.toString.call(headers) === '[object Array]') {
+			if (Array.isArray(headers)) {
 				return headers.concat([['traceparent', value]]);
 			}
 			if (headers && typeof headers === 'object' && typeof headers.get !== 'function') {
@@ -1442,7 +1436,7 @@
 			if (typeof headers.get === 'function') {
 				return String(headers.get(name) || '');
 			}
-			if (Object.prototype.toString.call(headers) === '[object Array]') {
+			if (Array.isArray(headers)) {
 				for (var i = 0; i < headers.length; i++) {
 					if (String(headers[i] && headers[i][0]).toLowerCase() === name) {
 						return String(headers[i][1] || '');
@@ -1520,16 +1514,16 @@
 		}
 		
 		var resource = [
-			attr('telemetry.sdk.name', {stringValue: 'ovos-console-client'}),
-			attr('telemetry.sdk.language', {stringValue: 'webjs'}),
-			attr('service.name', {stringValue: String(location.host || '')}),
+			attr('telemetry.sdk.name', 'ovos-console-client'),
+			attr('telemetry.sdk.language', 'webjs'),
+			attr('service.name', String(location.host || '')),
 		];
 		if (config.release) {
-			resource.push(attr('service.version', {stringValue: truncate(config.release, 64)}));
+			resource.push(attr('service.version', truncate(config.release, 64)));
 		}
 		
 		return {resourceLogs: [{
-			resource: {attributes: resource},
+			resource: {attributes: resource.filter(Boolean)},
 			scopeLogs: [{
 				scope: {name: 'ovos-console-client'},
 				logRecords: records,
@@ -1539,39 +1533,36 @@
 	
 	function otlpRecord(entry) {
 		var attributes = [
-			attr('exception.type', {stringValue: entry.name || 'Error'}),
-			attr('url.full', {stringValue: entry.url}),
+			attr('exception.type', entry.name || 'Error'),
+			attr('url.full', entry.url),
 		];
 		if (entry.stack) {
-			attributes.push(attr('exception.stacktrace', {stringValue: entry.stack}));
+			attributes.push(attr('exception.stacktrace', entry.stack));
 		}
 		if (entry.file) {
-			attributes.push(attr('code.file.path', {stringValue: entry.file}));
+			attributes.push(attr('code.file.path', entry.file));
 		}
 		if (entry.line) {
-			attributes.push(attr('code.line.number', {intValue: String(entry.line)}));
+			attributes.push(attr('code.line.number', entry.line));
 		}
 		if (entry.col) {
-			attributes.push(attr('code.column.number', {intValue: String(entry.col)}));
+			attributes.push(attr('code.column.number', entry.col));
 		}
 		try {
 			if (navigator.userAgent) {
-				attributes.push(attr('user_agent.original', {stringValue: truncate(navigator.userAgent, 500)}));
+				attributes.push(attr('user_agent.original', truncate(navigator.userAgent, 500)));
 			}
 		} catch (ignored) {}
 		if (entry.count > 1) {
 			// the js path's dedup counter slot (extra.client_count)
-			attributes.push(attr('client_count', {intValue: String(entry.count)}));
+			attributes.push(attr('client_count', entry.count));
 		}
 		
 		// extra fields become one attribute each — unmapped attributes spill
 		// into the console's context.extra verbatim, so pageId, breadcrumbs,
 		// request and snapshotId land exactly where the js endpoint puts them
 		for (var key in entry.extra || {}) {
-			var value = anyValue(entry.extra[key], 0);
-			if (value) {
-				attributes.push(attr(key, value));
-			}
+			attributes.push(attr(key, entry.extra[key]));
 		}
 		
 		var record = {
@@ -1580,7 +1571,7 @@
 			severityNumber: OTLP_SEVERITY[entry.priority] || 17,
 			severityText: OTLP_SEVERITY_TEXT[entry.priority] || 'ERROR',
 			body: {stringValue: entry.message},
-			attributes: attributes,
+			attributes: attributes.filter(Boolean),
 		};
 		if (entry.traceId) {
 			record.traceId = entry.traceId;
@@ -1589,8 +1580,10 @@
 		return record;
 	}
 	
+	/** OTLP KeyValue via anyValue — null (filtered out) when not encodable */
 	function attr(key, value) {
-		return {key: key, value: value};
+		var encoded = anyValue(value, 0);
+		return encoded ? {key: key, value: encoded} : null;
 	}
 	
 	/** JS value -> OTLP AnyValue (depth-capped; unsupported shapes and
@@ -1602,7 +1595,9 @@
 			}
 			var type = typeof value;
 			if (type === 'string') {
-				return {stringValue: truncate(value, 4000)};
+				// 8000 matches the report()-side stack cap — the widest
+				// string a report legitimately carries
+				return {stringValue: truncate(value, 8000)};
 			}
 			if (type === 'boolean') {
 				return {boolValue: value};
@@ -1618,7 +1613,7 @@
 			if (depth >= 4) {
 				return {stringValue: truncate(String(value), 200)};
 			}
-			if (Object.prototype.toString.call(value) === '[object Array]') {
+			if (Array.isArray(value)) {
 				var values = [];
 				for (var i = 0; i < value.length && i < 50; i++) {
 					var item = anyValue(value[i], depth + 1);

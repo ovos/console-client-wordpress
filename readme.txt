@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.3.1
+Stable tag: 0.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,9 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.3.2 =
+* Bundled console-client.js refreshed (lockstep with the console): internal cleanup, crypto-quality page/snapshot ids where the browser supports it. No settings or behavior changes.
 
 = 0.3.1 =
 * Bundled console-client.js updated in lockstep with the console (adds an OTLP collector export capability; unused by the plugin — no settings changed).
