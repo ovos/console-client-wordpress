@@ -47,7 +47,9 @@
  *   viewer), snapshotStyleMaxBytes (raw-CSS budget for that).
  *
  * Captures window "error" and "unhandledrejection" events; duplicates
- * within a page load are counted, not re-sent. Batches are flushed
+ * within a page load are counted, not re-sent. Errors thrown by code the
+ * page does not control — browser extensions and scripts that in-app
+ * browsers inject (iabjs:, gsa:, …) — are dropped, see isInjectedUrl(). Batches are flushed
  * after a short debounce and on page hide via sendBeacon (text/plain
  * keeps the request preflight-free — the server validates Origin).
  *
@@ -166,7 +168,14 @@
 			if (!(event instanceof ErrorEvent)) {
 				return; // resource load errors are handled by onResourceError
 			}
-			if (isExtensionUrl(event.filename)) {
+			if (isInjectedUrl(event.filename)) {
+				return;
+			}
+			// injected code that surfaces no filename (eval/new Function) —
+			// extension or GTM Custom HTML wrapping top.addEventListener into
+			// infinite recursion, say — slips past the filename check above but
+			// leaves an all-<anonymous> stack; see isUnattributableStack
+			if (isUnattributableStack(event.error && event.error.stack)) {
 				return;
 			}
 			report({
@@ -218,7 +227,7 @@
 			
 			var tag = target.tagName.toLowerCase();
 			var url = String(target.src || target.href || '');
-			if (!url || isExtensionUrl(url)) {
+			if (!url || isInjectedUrl(url)) {
 				return;
 			}
 			
@@ -1237,8 +1246,32 @@
 		return false;
 	}
 	
-	function isExtensionUrl(url) {
-		return /^(chrome|moz|safari)-extension:/.test(url || '');
+	/** code the page neither loads nor controls: browser extensions (Safari
+		16.4+ masks their frames as webkit-masked-url:), and scripts in-app
+		browsers inject via their native bridge — iabjs: (Meta's Android
+		webview, e.g. "Java object is gone" on unload), gsa: (Google iOS app),
+		webviewprogressproxy: (older iOS webviews). Denylist on purpose:
+		blob:/data: can be first-party (workers, eval'd bundles) and must
+		keep reporting. */
+	function isInjectedUrl(url) {
+		return /^(?:(?:chrome|moz|safari|safari-web|ms-browser)-extension|webkit-masked-url|iabjs|gsa|webviewprogressproxy):/.test(url || '');
+	}
+	
+	/** an uncaught error whose stack names no loadable source — every frame is
+		<anonymous>, native, or eval'd — comes from code the page did not load:
+		a browser extension, or a GTM Custom HTML / in-app-browser script injected
+		via eval/new Function, which surfaces no script URL and so slips past
+		isInjectedUrl (that only sees an extension scheme in the FILENAME). The
+		observed case is a third party wrapping top.addEventListener into infinite
+		recursion — "Maximum call stack size exceeded", a stack of only
+		top.addEventListener <anonymous> frames. A genuine first-party error —
+		our own stack overflows included — still carries a source scheme (http(s):,
+		or the first-party blob:/data: isInjectedUrl deliberately keeps), so it is
+		kept. An empty/absent stack yields false: no evidence, so report. */
+	function isUnattributableStack(stack) {
+		stack = String(stack || '');
+		// a real source location prints its scheme; injected anonymous code has none
+		return /\S/.test(stack) && !/\b(?:https?|blob|data|file|wasm):/i.test(stack);
 	}
 	
 	/** truncate + redact sensitive query-param values, token-shaped path
