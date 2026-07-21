@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.3.3
+Stable tag: 0.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,9 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.3.4 =
+* Bundled console-client.js refreshed (lockstep with the console): browser JavaScript error reporting is now an allowlist — only errors attributable to your own code (same-origin scripts, their workers, and inline scripts in server-rendered markup) are reported. Errors from browser extensions, in-app-browser native bridges (Facebook, Google apps) and cross-origin/CDN third parties — which the site cannot fix — are dropped at the source, so no future injected-noise variant needs a client update. No settings changes.
 
 = 0.3.3 =
 * Bundled console-client.js refreshed (lockstep with the console): errors thrown by scripts in-app browsers inject (Facebook's iabjs:// "Java object is gone", gsa://, webkit-masked-url://) and by more extension scheme variants are no longer reported. No settings changes.

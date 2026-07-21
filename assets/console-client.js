@@ -47,11 +47,16 @@
  *   viewer), snapshotStyleMaxBytes (raw-CSS budget for that).
  *
  * Captures window "error" and "unhandledrejection" events; duplicates
- * within a page load are counted, not re-sent. Errors thrown by code the
- * page does not control — browser extensions and scripts that in-app
- * browsers inject (iabjs:, gsa:, …) — are dropped, see isInjectedUrl(). Batches are flushed
- * after a short debounce and on page hide via sendBeacon (text/plain
- * keeps the request preflight-free — the server validates Origin).
+ * within a page load are counted, not re-sent. Only errors attributable to
+ * code we put on the page are reported — an ALLOWLIST (see isFirstParty()):
+ * our same-origin scripts, our blob:/data: workers, and the inline <script>s
+ * of our own HTML (document URL at line > 1). Everything else running in the
+ * page is someone else's code: browser extensions, in-app-browser native
+ * bridges (document URL at line 1), cross-origin/CDN third parties,
+ * reason-less rejections — dropped, and no new injected-noise variant needs a
+ * client change. Batches are flushed after a short debounce and on page hide
+ * via sendBeacon (text/plain keeps the request preflight-free — the server
+ * validates Origin).
  *
  * Every report carries diagnostics under `extra`: network/page state,
  * viewport, a per-page-load pageId, a breadcrumb trail (fetch/XHR,
@@ -168,14 +173,12 @@
 			if (!(event instanceof ErrorEvent)) {
 				return; // resource load errors are handled by onResourceError
 			}
-			if (isInjectedUrl(event.filename)) {
-				return;
-			}
-			// injected code that surfaces no filename (eval/new Function) —
-			// extension or GTM Custom HTML wrapping top.addEventListener into
-			// infinite recursion, say — slips past the filename check above but
-			// leaves an all-<anonymous> stack; see isUnattributableStack
-			if (isUnattributableStack(event.error && event.error.stack)) {
+			// only errors attributable to code we put on the page: our same-origin
+			// scripts and the inline <script>s of our own HTML. Everything else —
+			// browser extensions, in-app-browser native bridges, cross-origin/CDN
+			// third parties — is not ours to fix and is dropped. See isFirstParty
+			// (an allowlist).
+			if (!isFirstParty(event.filename, event.error && event.error.stack, event.lineno)) {
 				return;
 			}
 			report({
@@ -200,7 +203,18 @@
 				return;
 			}
 			
+			// a tagged reason IS a failed fetch our wrapper saw — but the wrapper
+			// instruments window.fetch for the WHOLE page, third parties included,
+			// so being tagged is not evidence of ownership. Ours only when the
+			// endpoint or the call site is ours (isFirstPartyRequest). An untagged
+			// rejection must carry a first-party frame in its reason's stack — a
+			// reason-less rejection (undefined/null) has none and drops here too.
 			var request = reason && reason.__ovosConsoleRequest;
+			if (request
+				? !isFirstPartyRequest(request)
+				: !isFirstParty('', reason && reason.stack)) {
+				return;
+			}
 			
 			report({
 				message: stringifyReason(reason),
@@ -1246,32 +1260,97 @@
 		return false;
 	}
 	
-	/** code the page neither loads nor controls: browser extensions (Safari
-		16.4+ masks their frames as webkit-masked-url:), and scripts in-app
-		browsers inject via their native bridge — iabjs: (Meta's Android
-		webview, e.g. "Java object is gone" on unload), gsa: (Google iOS app),
-		webviewprogressproxy: (older iOS webviews). Denylist on purpose:
-		blob:/data: can be first-party (workers, eval'd bundles) and must
-		keep reporting. */
+	/** resource urls the page neither loads nor controls: browser extensions
+		(Safari 16.4+ masks their frames as webkit-masked-url:), and scripts
+		in-app browsers inject via their native bridge — iabjs: (Meta's Android
+		webview), gsa: (Google iOS app), webviewprogressproxy: (older iOS
+		webviews). Used by onResourceError only — JS error reports go through
+		the isFirstParty allowlist instead, which drops these schemes anyway
+		(they are not http). */
 	function isInjectedUrl(url) {
 		return /^(?:(?:chrome|moz|safari|safari-web|ms-browser)-extension|webkit-masked-url|iabjs|gsa|webviewprogressproxy):/.test(url || '');
 	}
 	
-	/** an uncaught error whose stack names no loadable source — every frame is
-		<anonymous>, native, or eval'd — comes from code the page did not load:
-		a browser extension, or a GTM Custom HTML / in-app-browser script injected
-		via eval/new Function, which surfaces no script URL and so slips past
-		isInjectedUrl (that only sees an extension scheme in the FILENAME). The
-		observed case is a third party wrapping top.addEventListener into infinite
-		recursion — "Maximum call stack size exceeded", a stack of only
-		top.addEventListener <anonymous> frames. A genuine first-party error —
-		our own stack overflows included — still carries a source scheme (http(s):,
-		or the first-party blob:/data: isInjectedUrl deliberately keeps), so it is
-		kept. An empty/absent stack yields false: no evidence, so report. */
-	function isUnattributableStack(stack) {
-		stack = String(stack || '');
-		// a real source location prints its scheme; injected anonymous code has none
-		return /\S/.test(stack) && !/\b(?:https?|blob|data|file|wasm):/i.test(stack);
+	/** the page's own origin — the scripts we care about are the ones we serve
+		from here. Falls back to protocol+host on ancient browsers lacking
+		location.origin. */
+	function firstPartyOrigin() {
+		try {
+			return location.origin || (location.protocol + '//' + location.host);
+		} catch (ignored) {
+			return '';
+		}
+	}
+	
+	/** true when the error is attributable to code WE put on the page — the only
+		errors we report. Evidence is a first-party source in the filename or ANY
+		stack frame:
+		  - a same-origin .js resource (one of our bundles),
+		  - a blob:/data: url (a worker or eval'd bundle we created), or
+		  - the same-origin document URL at line > 1: an inline <script> in our
+		    server-rendered HTML. In-app browsers inject their native bridges
+		    (Meta's window.webkit.*, Chrome iOS's __gCrWeb) as SINGLE-LINE user
+		    scripts also attributed to the document URL — but those always report
+		    :1:col, while our markup is not minified and every inline script sits
+		    far below line 1. Line 1 therefore stays dropped. (A site that minifies
+		    its HTML onto one line loses inline reports — same as before this rule,
+		    never noisier.)
+		Everything else running in our page is someone else's code and is dropped:
+		browser extensions (extension: / webkit-masked-url: — not http, so never
+		matched), injected native bridges (line 1), cross-origin / CDN third
+		parties (different origin, no matter the line), and reason-less rejections
+		(no source at all). This is an ALLOWLIST: a new injected-noise variant
+		needs no client change, it simply never matches a first-party source.
+		`line` carries the error event's lineno for the bare `filename` (stack
+		frames carry their own :line:col). */
+	function isFirstParty(filename, stack, line) {
+		var origin = firstPartyOrigin();
+		var sources = String(filename || '');
+		if (sources && line) {
+			// let the document-url rule below see the event's line number the
+			// same way it sees a stack frame's
+			sources += ':' + line;
+		}
+		sources += '\n' + String(stack || '');
+		var re = /(?:blob|data):[^\s'"()]+|https?:\/\/[^\s'"()]+/gi;
+		var match;
+		while ((match = re.exec(sources))) {
+			var url = match[0];
+			if (/^(?:blob|data):/i.test(url)) {
+				return true; // a worker / eval'd bundle we created
+			}
+			if (!origin || url.indexOf(origin + '/') !== 0) {
+				continue; // someone else's origin — never ours
+			}
+			// a loaded script resource (.js) of ours. Strip a trailing :line:col
+			// and any ?query/#hash before the extension test.
+			if (/\.m?js$/i.test(url.replace(/:\d+(?::\d+)?$/, '').split(/[?#]/)[0])) {
+				return true;
+			}
+			// the document URL below line 1 — an inline <script> in our HTML
+			var frameLine = /:(\d+)(?::\d+)?$/.exec(url);
+			if (frameLine && parseInt(frameLine[1], 10) > 1) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	/** a failed fetch is ours when it targets our own backend — a relative url
+		is same-origin by definition — or when its call-site stack (captured at
+		fetch() time, see instrumentFetch) names one of our scripts. A third-party
+		SDK's failed call to its own backend matches neither and is dropped. */
+	function isFirstPartyRequest(request) {
+		var url = String(request.url || '');
+		// no scheme and no leading // — relative, resolves against our origin
+		if (!/^(?:https?:)?\/\//i.test(url)) {
+			return true;
+		}
+		var origin = firstPartyOrigin();
+		if (origin && (url === origin || url.indexOf(origin + '/') === 0)) {
+			return true;
+		}
+		return isFirstParty('', request.callStack);
 	}
 	
 	/** truncate + redact sensitive query-param values, token-shaped path
