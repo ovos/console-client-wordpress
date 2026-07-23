@@ -97,6 +97,7 @@ class Settings
 			'url' => esc_url_raw(trim((string)($input['url'] ?? ''))),
 			'api_key' => trim((string)($input['api_key'] ?? '')),
 			'log_level' => max(0, min(7, (int)($input['log_level'] ?? Config::DEFAULTS['log_level']))),
+			'report_404' => ($input['report_404'] ?? '') === '1',
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
 			'js_enabled' => ($input['js_enabled'] ?? '') === '1',
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
@@ -152,10 +153,13 @@ class Settings
 			__('API key', 'ovos-console'), 'password', '',
 			__('The project\'s secret api_key. Stored value is kept when left blank.', 'ovos-console'));
 		$this->levelField();
+		$this->checkboxField('report_404',
+			__('Report 404s', 'ovos-console'),
+			__('Report front-end not-found (404) requests as access events. Surfaces scanner and broken-link traffic in the console, grouped apart from real errors and never creating issues. Rate-limited, and static-asset 404s are ignored.', 'ovos-console'));
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
 			__('Optional deploy label (git sha, version), max 64 characters.', 'ovos-console'));
-			
+		
 		echo '</table>';
 		
 		echo '<h2>' . esc_html__('Browser errors', 'ovos-console') . '</h2>';

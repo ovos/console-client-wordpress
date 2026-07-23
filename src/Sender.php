@@ -21,6 +21,7 @@ use function error_reporting;
 use function function_exists;
 use function in_array;
 use function json_encode;
+use function mb_substr;
 use function register_shutdown_function;
 use function rtrim;
 use function session_id;
@@ -135,6 +136,47 @@ class Sender
 	}
 	
 	/**
+	 * Reports a not-found access event as a type=404 report (priority 6, INFO).
+	 * The console groups these apart from real errors, never turns them into
+	 * issues, and its per-project report_404 switch decides acceptance. No-op
+	 * unless report_404 is enabled here. The path (query stripped and scrubbed
+	 * with the request patterns) is the message so distinct probes stay distinct
+	 * while one hammered path folds together; the report ships from the shutdown
+	 * flush like any other.
+	 */
+	public function capture404(
+		string $path = '',
+		array $extra = [],
+	): void
+	{
+		if($this->config->report404() === false
+			|| count($this->queue) >= self::MAX_QUEUE)
+		{
+			return;
+		}
+		
+		try
+		{
+			$path = Redactor::scrubUrl($path !== '' ? $path : $this->server('REQUEST_URI'));
+			
+			$mark = strpos($path, '?');
+			if($mark !== false)
+			{
+				$path = substr($path, 0, $mark);
+			}
+			
+			$payload = Payload::fromMessage('404 Not Found: ' . mb_substr($path, 0, 512), 6, $extra);
+			$payload['type'] = '404';
+			
+			$this->queue[] = $payload;
+		}
+		catch(Throwable)
+		{
+			// never break the host site
+		}
+	}
+	
+	/**
 	 * set_error_handler callback — captures, then hands over to the
 	 * previous handler (or to PHP's own, by returning false)
 	 */
@@ -210,7 +252,10 @@ class Sender
 			
 			foreach($this->queue as $payload)
 			{
-				if($payload['priority'] > $logLevel)
+				// a 404 access event rides the INFO band but is a KIND, not a
+				// severity — the log_level gate (a severity filter) must not drop it
+				if(($payload['type'] ?? '') !== '404'
+					&& $payload['priority'] > $logLevel)
 				{
 					continue;
 				}
@@ -285,7 +330,8 @@ class Sender
 		array $context,
 	): array
 	{
-		$payload['type'] = $context['type'];
+		// respect a type the payload already carries (404); else the request type
+		$payload['type'] ??= $context['type'];
 		$payload['context'] = $context['context']
 			+ ['extra' => Redactor::scrub($payload['extra']) + $this->buildWpExtra($payload)];
 		unset($payload['extra']);

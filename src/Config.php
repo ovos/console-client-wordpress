@@ -27,6 +27,7 @@ class Config
 		'url' => '',
 		'api_key' => '',
 		'log_level' => 4,
+		'report_404' => false,
 		'release' => '',
 		'js_enabled' => true,
 		'js_key' => '',
@@ -92,6 +93,11 @@ class Config
 	public function logLevel(): int
 	{
 		return max(0, min(7, (int)$this->get('log_level')));
+	}
+	
+	public function report404(): bool
+	{
+		return (bool)$this->get('report_404');
 	}
 	
 	public function release(): string

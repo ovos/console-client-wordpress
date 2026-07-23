@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.3.5
+Stable tag: 0.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,9 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.4.0 =
+* New: optional 404 reporting. When enabled (Settings → ovos console → "Report 404s", off by default), front-end not-found requests are reported to the console as access events — surfacing scanner probes and broken links, grouped apart from real errors and never turned into issues. Rate-limited so a scan cannot flood, and static-asset 404s (images, styles, scripts) are ignored. Lockable via an `OVOS_CONSOLE_REPORT_404` constant. Requires a console instance that understands the 404 error type.
 
 = 0.3.5 =
 * Wider PII redaction, server- and browser-side: e-mail addresses found in any request value, URL (including the referer) or WP-CLI argument are now masked (domain kept, e.g. j***@example.com); username-named fields (login, user_login, user/username params) are anonymized to their first character; `pwd` was added to the secret-field pattern. Extra context passed to `captureException()`/`captureMessage()` and the bundled browser client's own extra data are scrubbed the same way before they leave the site.
