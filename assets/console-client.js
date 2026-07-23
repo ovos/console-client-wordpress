@@ -49,10 +49,11 @@
  * Captures window "error" and "unhandledrejection" events; duplicates
  * within a page load are counted, not re-sent. Only errors attributable to
  * code we put on the page are reported — an ALLOWLIST (see isFirstParty()):
- * our same-origin scripts, our blob:/data: workers, and the inline <script>s
- * of our own HTML (document URL at line > 1). Everything else running in the
- * page is someone else's code: browser extensions, in-app-browser native
- * bridges (document URL at line 1), cross-origin/CDN third parties,
+ * our same-origin scripts and the inline <script>s of our own HTML (document
+ * URL at line > 1). Everything else running in the page is someone else's
+ * code: browser extensions, in-app-browser native bridges (document URL at
+ * line 1), cross-origin/CDN third parties, blob:/data: payloads minted by any
+ * of them (a blob's origin is the creating page's, not proof we authored it),
  * reason-less rejections — dropped, and no new injected-noise variant needs a
  * client change. Batches are flushed after a short debounce and on page hide
  * via sendBeacon (text/plain keeps the request preflight-free — the server
@@ -90,11 +91,21 @@
 	var loadStart = Date.now();
 	
 	// values of sensitive-looking query params -> [redacted]
-	var SCRUB_PARAMS = /([?&#][^=&#]*(?:token|key|password|passwd|auth|session|secret|email)[^=&#]*=)[^&#]*/gi;
+	var SCRUB_PARAMS = /([?&#][^=&#]*(?:token|key|password|passwd|pwd|auth|session|secret|email)[^=&#]*=)[^&#]*/gi;
 	// token-shaped PATH segments (JWT, long hex/base64url, uuid) -> [redacted];
 	// query params live in SCRUB_PARAMS, but secrets hide in paths too
 	// (/reset-password/<jwt>, /invite/<token>)
 	var SCRUB_PATH = /(\/)(?:eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z0-9_-]{24,})(?=[/?#]|$)/g;
+	// an e-mail address (plain or %40-encoded) anywhere -> first char + domain
+	// kept (j***@example.com)
+	var EMAIL_VALUE = /([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@|%40)([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+	// anchored username-ish query params -> first char + *** (the lookahead
+	// skips values the e-mail mask already handled)
+	var SCRUB_USER_PARAMS = /([?&#](?:user(?:[_-]?(?:name|login))?|login)=)(?![^&#]*\*{3})([^&#])[^&#]*/gi;
+	// secret-named keys of the extra bag -> [redacted]
+	var SCRUB_KEYS = /pass(word|wd)?|pwd|token|secret|authorization|cookie|api[-_]?key/i;
+	// anchored username keys of the extra bag -> first char + ***
+	var USER_KEYS = /^(user([_-]?(name|login))?|login)$/i;
 	
 	var DEFAULTS = {
 		url: '',
@@ -377,7 +388,9 @@
 			}
 		}
 		
-		return merged;
+		// secrets dropped, e-mails masked (domain kept), username fields
+		// anonymized — the console scrubs again server-side as a backstop
+		return scrubBag(merged, 0);
 	}
 	
 	function diagnostics() {
@@ -1285,8 +1298,7 @@
 	/** true when the error is attributable to code WE put on the page — the only
 		errors we report. Evidence is a first-party source in the filename or ANY
 		stack frame:
-		  - a same-origin .js resource (one of our bundles),
-		  - a blob:/data: url (a worker or eval'd bundle we created), or
+		  - a same-origin .js resource (one of our bundles), or
 		  - the same-origin document URL at line > 1: an inline <script> in our
 		    server-rendered HTML. In-app browsers inject their native bridges
 		    (Meta's window.webkit.*, Chrome iOS's __gCrWeb) as SINGLE-LINE user
@@ -1295,12 +1307,21 @@
 		    far below line 1. Line 1 therefore stays dropped. (A site that minifies
 		    its HTML onto one line loses inline reports — same as before this rule,
 		    never noisier.)
+		A blob:/data: url is NOT first-party evidence: a blob inherits the origin of
+		whatever created it in our page, so an extension, an injected in-app bridge
+		or a GTM-injected tag all mint blob:<our-origin>/… — the origin is the
+		creating context's, not proof WE authored the code (we ship no blob/data
+		scripts). It is skipped (matched as a whole so the http(s) url embedded in a
+		blob: url is not mistaken for a real script frame); a genuine first-party
+		eval still leaves a real .js or inline-document frame in the same stack,
+		which the rules above catch.
 		Everything else running in our page is someone else's code and is dropped:
 		browser extensions (extension: / webkit-masked-url: — not http, so never
-		matched), injected native bridges (line 1), cross-origin / CDN third
-		parties (different origin, no matter the line), and reason-less rejections
-		(no source at all). This is an ALLOWLIST: a new injected-noise variant
-		needs no client change, it simply never matches a first-party source.
+		matched), injected native bridges (line 1), obfuscated blob/data payloads
+		(origin ≠ authorship), cross-origin / CDN third parties (different origin,
+		no matter the line), and reason-less rejections (no source at all). This is
+		an ALLOWLIST: a new injected-noise variant needs no client change, it simply
+		never matches a first-party source.
 		`line` carries the error event's lineno for the bare `filename` (stack
 		frames carry their own :line:col). */
 	function isFirstParty(filename, stack, line) {
@@ -1317,7 +1338,15 @@
 		while ((match = re.exec(sources))) {
 			var url = match[0];
 			if (/^(?:blob|data):/i.test(url)) {
-				return true; // a worker / eval'd bundle we created
+				// NOT first-party evidence: a blob inherits the origin of whatever
+				// created it in our page, so extensions, injected in-app bridges and
+				// GTM-injected tags all mint blob:<our-origin>/… — origin is the
+				// creating context's, not proof WE authored it (we ship no blob/data
+				// scripts). Matched as a whole so the http(s) url embedded in a blob:
+				// url is not taken for a real script frame, then skipped; a genuine
+				// first-party eval still leaves a real .js/inline-document frame in
+				// the same stack, which the checks below catch.
+				continue;
 			}
 			if (!origin || url.indexOf(origin + '/') !== 0) {
 				continue; // someone else's origin — never ours
@@ -1353,12 +1382,17 @@
 		return isFirstParty('', request.callStack);
 	}
 	
-	/** truncate + redact sensitive query-param values, token-shaped path
-		segments, and any caller-supplied patterns */
+	/** truncate + redact sensitive query-param values, mask e-mails and
+		username params, redact token-shaped path segments and any
+		caller-supplied patterns */
 	function scrub(value, max) {
 		value = truncate(value, max || 500);
 		try {
 			value = value.replace(SCRUB_PARAMS, '$1[redacted]');
+			// e-mail values in any remaining param or path segment (domain
+			// kept), then username-named params down to their first character
+			value = value.replace(EMAIL_VALUE, '$1***$2$3');
+			value = value.replace(SCRUB_USER_PARAMS, '$1$2***');
 			value = value.replace(SCRUB_PATH, '$1[redacted]');
 			if (config && config.scrub) {
 				for (var i = 0; i < config.scrub.length; i++) {
@@ -1380,6 +1414,54 @@
 			pattern.__ovosGlobal = new RegExp(pattern.source, pattern.flags + 'g');
 		}
 		return pattern.__ovosGlobal;
+	}
+	
+	/** extra bag (and nested request bags): secret-named keys dropped,
+		e-mail values masked (domain kept), username keys masked to their
+		first character */
+	function scrubBag(bag, depth) {
+		try {
+			if (typeof bag === 'string') {
+				return bag.replace(EMAIL_VALUE, '$1***$2$3');
+			}
+			if (bag === null || typeof bag !== 'object') {
+				return bag;
+			}
+			if (depth >= 6) {
+				return '[redacted]';
+			}
+			if (Array.isArray(bag)) {
+				var list = [];
+				for (var i = 0; i < bag.length; i++) {
+					list.push(scrubBag(bag[i], depth + 1));
+				}
+				return list;
+			}
+			var out = {};
+			for (var key in bag) {
+				var value = bag[key];
+				if (SCRUB_KEYS.test(key)) {
+					// dropped wholesale — even when the value is an object
+					out[key] = '[redacted]';
+				} else if (value !== null && typeof value === 'object') {
+					out[key] = scrubBag(value, depth + 1);
+				} else if (typeof value === 'string') {
+					var masked = value.replace(EMAIL_VALUE, '$1***$2$3');
+					out[key] = masked === value && USER_KEYS.test(key) ? maskName(value) : masked;
+				} else {
+					out[key] = value;
+				}
+			}
+			return out;
+		} catch (ignored) {
+			// best-effort: an unreadable bag is dropped, never sent raw
+			return null;
+		}
+	}
+	
+	/** first character + *** — fixed suffix, no length leak */
+	function maskName(value) {
+		return value === '' ? '' : value.charAt(0) + '***';
 	}
 	
 	/** host-aware path of a request url — the grouping key for failed calls.

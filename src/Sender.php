@@ -318,7 +318,8 @@ class Sender
 		{
 			$context['host'] = $this->homeHost();
 			$context['args'] = isset($_SERVER['argv'])
-				? array_values(array_map('sanitize_text_field', wp_unslash((array)$_SERVER['argv'])))
+				? Redactor::scrubArgs(array_values(
+					array_map('sanitize_text_field', wp_unslash((array)$_SERVER['argv']))))
 				: [];
 		}
 		else
@@ -326,9 +327,11 @@ class Sender
 			$host = $this->server('HTTP_HOST');
 			
 			$context['host'] = $host !== '' ? $host : $this->homeHost();
-			$context['uri'] = $this->server('REQUEST_URI');
+			// secrets and e-mails travel in query strings too — scrub the
+			// url copies the same way request.get is scrubbed
+			$context['uri'] = Redactor::scrubUrl($this->server('REQUEST_URI'));
 			$context['method'] = $this->server('REQUEST_METHOD');
-			$context['referer'] = $this->server('HTTP_REFERER');
+			$context['referer'] = Redactor::scrubUrl($this->server('HTTP_REFERER'));
 			$context['ip'] = $this->server('REMOTE_ADDR');
 			$context['ua'] = $this->server('HTTP_USER_AGENT');
 			

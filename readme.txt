@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.3.4
+Stable tag: 0.3.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,10 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.3.5 =
+* Wider PII redaction, server- and browser-side: e-mail addresses found in any request value, URL (including the referer) or WP-CLI argument are now masked (domain kept, e.g. j***@example.com); username-named fields (login, user_login, user/username params) are anonymized to their first character; `pwd` was added to the secret-field pattern. Extra context passed to `captureException()`/`captureMessage()` and the bundled browser client's own extra data are scrubbed the same way before they leave the site.
+* Bundled console-client.js: `blob:`/`data:` script urls are no longer treated as first-party evidence for JavaScript error reporting — such urls can be minted by browser extensions or injected third-party tags on your page, not just your own code, so they no longer cause otherwise-foreign errors to be reported.
 
 = 0.3.4 =
 * Bundled console-client.js refreshed (lockstep with the console): browser JavaScript error reporting is now an allowlist — only errors attributable to your own code (same-origin scripts, their workers, and inline scripts in server-rendered markup) are reported. Errors from browser extensions, in-app-browser native bridges (Facebook, Google apps) and cross-origin/CDN third parties — which the site cannot fix — are dropped at the source, so no future injected-noise variant needs a client update. No settings changes.
