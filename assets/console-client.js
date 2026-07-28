@@ -90,12 +90,23 @@
 	var breadcrumbs = []; // ring buffer, oldest first
 	var loadStart = Date.now();
 	
-	// values of sensitive-looking query params -> [redacted]
-	var SCRUB_PARAMS = /([?&#][^=&#]*(?:token|key|password|passwd|pwd|auth|session|secret|email)[^=&#]*=)[^&#]*/gi;
-	// token-shaped PATH segments (JWT, long hex/base64url, uuid) -> [redacted];
-	// query params live in SCRUB_PARAMS, but secrets hide in paths too
-	// (/reset-password/<jwt>, /invite/<token>)
-	var SCRUB_PATH = /(\/)(?:eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z0-9_-]{24,})(?=[/?#]|$)/g;
+	// Values of sensitive-looking query params -> [redacted]. Two groups, the
+	// same split the server backstop makes: names distinctive enough to match
+	// as a SUBSTRING (api_key, csrf_token), and generic ones that must be the
+	// WHOLE name — `code` is an OAuth authorization code and `sig`/`signature`
+	// are webhook signatures, but matched loosely they would also eat
+	// ?design=, ?assign= and ?barcode=. Server side: Scrubber::NAMES (substring)
+	// and Scrubber::QUERY_NAMES (exact); keep the two lists in step.
+	var SCRUB_PARAMS = /([?&#](?:[^=&#]*(?:token|key|password|passwd|pwd|auth|session|secret|email)[^=&#]*|code|sig|signature)=)[^&#]*/gi;
+	// Token-shaped PATH segments -> [redacted]. Query params live in
+	// SCRUB_PARAMS, but single-use credentials travel in paths and are followed
+	// over GET: /reset-password/<jwt>, /invite/<token>, a magic link.
+	//
+	// The candidate is deliberately loose and the DECISION is in looksSecret():
+	// the old rule redacted any 24+ character segment of [A-Za-z0-9_-], which
+	// is also what a readable slug looks like — /de/pre-und-onboarding/ came
+	// back as /de/[redacted]/ and the URI column stopped saying anything.
+	var SCRUB_PATH = /(\/)([A-Za-z0-9_.-]{20,})(?=[/?#]|$)/g;
 	// an e-mail address (plain or %40-encoded) anywhere -> first char + domain
 	// kept (j***@example.com)
 	var EMAIL_VALUE = /([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@|%40)([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
@@ -329,7 +340,11 @@
 			message: truncate(error.message, 2000),
 			name: truncate(error.name, 100),
 			stack: truncate(error.stack, 8000),
-			file: truncate(error.file, 500),
+			// scrub, not just truncate: window.onerror hands us event.filename,
+			// and for an inline <script> that IS the document url — reset
+			// tokens, magic links and query strings included. The urlPath()
+			// callers are already redacted and scrub() is idempotent.
+			file: scrub(error.file, 500),
 			line: error.line,
 			col: error.col,
 			priority: error.priority,
@@ -1385,6 +1400,32 @@
 	/** truncate + redact sensitive query-param values, mask e-mails and
 		username params, redact token-shaped path segments and any
 		caller-supplied patterns */
+	/* A path segment is a secret, not a slug, when it has no word structure and
+		carries the character mix a generated token does. A slug is words joined
+		by - or _, lower case, at most the odd year; a token is one long run of
+		mixed case and digits, a uuid, a JWT, or a long hex string. Erring
+		towards redaction on the ambiguous ones: a leaked reset token costs more
+		than an unreadable URI. */
+	function looksSecret(segment) {
+		if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(segment)
+			|| /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)
+			|| /^[0-9a-f]{24,}$/i.test(segment)) {
+			return true;
+		}
+		if (segment.length < 24) {
+			return false;
+		}
+		var runs = segment.split(/[-_.]+/);
+		var longest = 0;
+		for (var i = 0; i < runs.length; i++) {
+			longest = Math.max(longest, runs[i].length);
+		}
+		var digits = /[0-9]/.test(segment);
+		// one long mixed-case run with digits, or a very long single run
+		return (digits && /[A-Z]/.test(segment) && longest >= 16)
+			|| (digits && longest >= 32);
+	}
+	
 	function scrub(value, max) {
 		value = truncate(value, max || 500);
 		try {
@@ -1393,7 +1434,9 @@
 			// kept), then username-named params down to their first character
 			value = value.replace(EMAIL_VALUE, '$1***$2$3');
 			value = value.replace(SCRUB_USER_PARAMS, '$1$2***');
-			value = value.replace(SCRUB_PATH, '$1[redacted]');
+			value = value.replace(SCRUB_PATH, function (match, slash, segment) {
+				return looksSecret(segment) ? slash + '[redacted]' : match;
+			});
 			if (config && config.scrub) {
 				for (var i = 0; i < config.scrub.length; i++) {
 					// force a global match — a caller's plain /re/ would else
@@ -1473,7 +1516,9 @@
 			a.href = url;
 			// keep the host when it is not ours, so third-party endpoints stay apart
 			var path = (a.host && a.host !== location.host ? a.host : '') + a.pathname;
-			return path.replace(SCRUB_PATH, '$1[redacted]');
+			return path.replace(SCRUB_PATH, function (match, slash, segment) {
+				return looksSecret(segment) ? slash + '[redacted]' : match;
+			});
 		} catch (ignored) {
 			return truncate(String(url).split('?')[0], 200);
 		}

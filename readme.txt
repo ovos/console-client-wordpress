@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.0
+Stable tag: 0.4.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,14 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.4.1 =
+* Fix: URL redaction no longer eats readable page paths. The bundled browser client shipped a rule that redacted ANY path segment of 24+ characters, which is also what a long slug looks like — so a page like /de/anmeldung-und-registrierung/ was reported as /de/[redacted]/ and the console's URI column stopped saying anything. A segment is now judged by its structure (a JWT, a uuid, a long hex string or one long run of mixed case with digits) rather than by its length alone.
+* Security: WordPress password-reset links are redacted. The reset token travels as wp-login.php?action=rp&key=..., and `key` matched none of the secret-field patterns (which look for api_key), so an error or a 404 on a reset link sent a live token to the console. `key`, `auth`, `code`, `sig` and `signature` are now dropped as query parameters. The user name beside it was already masked.
+* Security: token-shaped path segments are redacted server-side too. Single-use credentials travel in paths and are followed over GET — /reset/<token>, /invite/<token> — and only the browser client used to catch those; a 404 or a PHP error on such a URL sent the token.
+* Fix: `key`, `auth`, `code`, `sig` and `signature` were only being dropped as query parameters on the server; the bundled browser client's own pattern hadn't been taught the same names, so a JS error report could still carry them. The client now drops them too, matched by exact parameter name (not substring) so `?design=`, `?assign=` or `?barcode=` aren't caught by mistake.
+* Fix: the placeholder for a dropped value is now `[redacted]` on both sides — the server was writing `[removed]` while the browser client wrote `[redacted]`, so the same kind of drop read differently depending on which side did it.
+* Security: browser JavaScript error reports now scrub their source file/url instead of only truncating it. For an inline `<script>`, `window.onerror` hands back the document's own URL as the error's file — reset token or query string included — and that was passed through truncated but unredacted.
 
 = 0.4.0 =
 * New: optional 404 reporting. When enabled (Settings → ovos console → "Report 404s", off by default), front-end not-found requests are reported to the console as access events — surfacing scanner probes and broken links, grouped apart from real errors and never turned into issues. Rate-limited so a scan cannot flood, and static-asset 404s (images, styles, scripts) are ignored. Lockable via an `OVOS_CONSOLE_REPORT_404` constant. Requires a console instance that understands the 404 error type.

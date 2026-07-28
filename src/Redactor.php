@@ -3,18 +3,24 @@ declare(strict_types=1);
 
 namespace OvosConsole;
 
+use function in_array;
 use function is_array;
 use function is_string;
 use function ltrim;
+use function max;
 use function mb_substr;
 use function preg_match;
 use function preg_replace;
 use function preg_replace_callback;
+use function preg_split;
 use function rawurldecode;
 use function rawurlencode;
+use function strlen;
 use function strpos;
+use function strtolower;
 use function strtr;
 use function substr;
+use function trim;
 
 /**
  * Scrubs request variables and extras before they leave the site.
@@ -27,7 +33,7 @@ use function substr;
 final class Redactor
 {
 	/**
-	 * Field names whose value is dropped ([removed]). pass(word|wd)? also
+	 * Field names whose value is dropped ([redacted]). pass(word|wd)? also
 	 * covers pass1/pass2/user_pass as a substring; pwd is wp-login's field.
 	 */
 	protected const REDACT_PATTERN =
@@ -41,6 +47,32 @@ final class Redactor
 	 */
 	protected const USERNAME_PATTERN = '/^(user([_-]?(name|login))?|log(in)?)$/i';
 	
+	/**
+	 * Names that are credentials ONLY as query parameters, kept apart from
+	 * REDACT_PATTERN because they are too generic to drop as field names.
+	 *
+	 * `key` is WordPress's own password-reset token: wp-login.php?action=rp&
+	 * key=<20 chars>&login=<user>. Nothing above touched it — api[-_]key needs
+	 * the api — so a 404 or an error on a reset link sent a live key. `login`
+	 * was already masked; the key beside it was not.
+	 */
+	protected const QUERY_NAMES = ['key', 'auth', 'code', 'sig', 'signature'];
+
+	/**
+	 * A path segment is a secret, not a slug, when it has no word structure and
+	 * carries the character mix a generated token does: a JWT, a uuid, a long
+	 * hex string, or one long run of mixed case with digits. Single-use
+	 * credentials travel in paths and are followed over GET — /reset/<token>,
+	 * /invite/<token> — and this plugin had nothing between such a URL and the
+	 * console.
+	 *
+	 * The rule is shared with the console's own Scrubber and the browser
+	 * client; the corpus that pins all three lives in the console repo
+	 * (project/application/tests/fixtures/looks-secret.json). Keep them equal:
+	 * a length-only version of this once redacted every German slug.
+	 */
+	protected const PATH_CANDIDATE = '~(/)([A-Za-z0-9_.-]{20,})(?=[/?#]|$)~';
+
 	/**
 	 * An e-mail address inside a string value. The first local-part character
 	 * is kept and the domain is left intact (j***@example.com) — enough to tell
@@ -58,7 +90,7 @@ final class Redactor
 	{
 		if($depth >= self::MAX_DEPTH)
 		{
-			return ['[removed]'];
+			return ['[redacted]'];
 		}
 		
 		$clean = [];
@@ -69,7 +101,7 @@ final class Redactor
 			// secret key whose value is an array cannot leak through its children
 			if(preg_match(self::REDACT_PATTERN, (string)$key) === 1)
 			{
-				$clean[$key] = '[removed]';
+				$clean[$key] = '[redacted]';
 				
 				continue;
 			}
@@ -124,6 +156,12 @@ final class Redactor
 		string $url,
 	): string
 	{
+		// the PATH first — a token in a path is not a query parameter and had
+		// no rule at all here
+		$position = strpos($url, '?');
+		$url = self::scrubPath(
+			$position === false ? $url : substr($url, 0, $position),
+		) . ($position === false ? '' : substr($url, $position));
 		$position = strpos($url, '?');
 		if($position !== false)
 		{
@@ -131,9 +169,11 @@ final class Redactor
 				'~(^|&)([^&=]+)=([^&]*)~',
 				static function(array $match): string
 				{
-					if(preg_match(self::REDACT_PATTERN, rawurldecode($match[2])) === 1)
+					$name = rawurldecode($match[2]);
+					if(preg_match(self::REDACT_PATTERN, $name) === 1
+						|| in_array(strtolower(trim($name)), self::QUERY_NAMES, true))
 					{
-						return $match[1] . $match[2] . '=[removed]';
+						return $match[1] . $match[2] . '=[redacted]';
 					}
 					
 					$value = rawurldecode($match[3]);
@@ -185,7 +225,7 @@ final class Redactor
 			
 			if($removeNext)
 			{
-				$args[$key] = '[removed]';
+				$args[$key] = '[redacted]';
 				$removeNext = false;
 				
 				continue;
@@ -194,7 +234,7 @@ final class Redactor
 			if(preg_match('~^(--?)?([^=]+)=(.*)$~s', $arg, $match) === 1)
 			{
 				$args[$key] = preg_match(self::REDACT_PATTERN, $match[2]) === 1
-					? $match[1] . $match[2] . '=[removed]'
+					? $match[1] . $match[2] . '=[redacted]'
 					: (string)preg_replace(self::EMAIL_PATTERN, '${1}***@${2}', $arg);
 				
 				continue;
@@ -218,6 +258,56 @@ final class Redactor
 	 * Keeps the first character and masks the rest (marcin -> m***); an empty
 	 * string stays empty. The fixed suffix does not leak the original length.
 	 */
+	/**
+	 * Token-shaped PATH segments -> [redacted], leaving readable slugs alone.
+	 */
+	public static function scrubPath(
+		string $path,
+	): string
+	{
+		return (string)preg_replace_callback(
+			self::PATH_CANDIDATE,
+			static fn(array $match): string => self::looksSecret($match[2])
+				? $match[1] . '[redacted]'
+				: $match[0],
+			$path,
+		);
+	}
+
+	/**
+	 * See PATH_CANDIDATE: a generated token, not a slug. Where it is genuinely
+	 * ambiguous this errs towards redaction — an unreadable URI costs less than
+	 * a leaked reset token.
+	 */
+	public static function looksSecret(
+		string $segment,
+	): bool
+	{
+		if(preg_match('~^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$~', $segment) === 1
+			|| preg_match('~^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$~i', $segment) === 1
+			|| preg_match('~^[0-9a-f]{24,}$~i', $segment) === 1)
+		{
+			return true;
+		}
+
+		if(strlen($segment) < 24)
+		{
+			return false;
+		}
+
+		$longest = 0;
+		foreach(preg_split('~[-_.]+~', $segment) ?: [] as $run)
+		{
+			$longest = max($longest, strlen($run));
+		}
+
+		$digits = preg_match('~[0-9]~', $segment) === 1;
+
+		// one long mixed-case run with digits, or a very long single run
+		return ($digits && preg_match('~[A-Z]~', $segment) === 1 && $longest >= 16)
+			|| ($digits && $longest >= 32);
+	}
+
 	protected static function maskName(
 		string $value,
 	): string
