@@ -89,6 +89,9 @@
 	var pageId = '';      // random per page load — correlates sibling reports
 	var breadcrumbs = []; // ring buffer, oldest first
 	var loadStart = Date.now();
+	var navInstrumented = false;   // history/popstate wrapping is one-time
+	var clicksInstrumented = false;
+	var lifecycleBound = false;    // the window/document listeners init() adds
 	
 	// Values of sensitive-looking query params -> [redacted]. Two groups, the
 	// same split the server backstop makes: names distinctive enough to match
@@ -164,18 +167,23 @@
 			
 			pageId = randomHex(8);
 			
-			window.addEventListener('error', onError);
-			window.addEventListener('unhandledrejection', onRejection);
-			window.addEventListener('pagehide', flush);
-			document.addEventListener('visibilitychange', function () {
-				if (document.visibilityState === 'hidden') {
-					flush();
-				}
-			});
-			
-			// resource load failures do not bubble — capture phase only
-			window.addEventListener('error', onResourceError, true);
-			
+			// Once. The four named handlers are deduped by addEventListener,
+			// but the visibilitychange one is anonymous and a second init()
+			// added another copy of it — one flush per registration.
+			// Re-initialising to change config stays supported; only the
+			// wiring is one-time.
+			if (!lifecycleBound) {
+				lifecycleBound = true;
+
+				window.addEventListener('error', onError);
+				window.addEventListener('unhandledrejection', onRejection);
+				window.addEventListener('pagehide', flush);
+				document.addEventListener('visibilitychange', onVisibilityChange);
+
+				// resource load failures do not bubble — capture phase only
+				window.addEventListener('error', onResourceError, true);
+			}
+
 			if (config.instrumentFetch) {
 				instrumentFetch();
 			}
@@ -502,6 +510,11 @@
 	}
 	
 	function instrumentClicks() {
+		// anonymous listener, so addEventListener cannot dedupe it for us
+		if (clicksInstrumented) {
+			return;
+		}
+		clicksInstrumented = true;
 		document.addEventListener('click', function (event) {
 			try {
 				var target = event.target;
@@ -517,6 +530,22 @@
 	
 	function instrumentNav() {
 		try {
+			// history.pushState is REPLACED here and the listeners below are
+			// anonymous, so a second init() wraps the wrapper and registers a
+			// second pair: every navigation then records two identical crumbs
+			// and halves the usable trail inside the 20-slot ring. The fetch,
+			// xhr and console wrappers have carried a guard all along; these
+			// did not, and a WordPress site where the plugin and a theme
+			// snippet both call init() is not hypothetical.
+			//
+			// A flag rather than a marker on pushState: the listeners go on
+			// first, and a browser without history.pushState would never
+			// reach the marker at all.
+			if (navInstrumented) {
+				return;
+			}
+			navInstrumented = true;
+
 			var record = function () {
 				crumb('nav', {url: scrub(location.href, 200)});
 			};
@@ -561,17 +590,25 @@
 		} catch (ignored) {}
 	}
 	
+	/** console.* arguments as one breadcrumb line, scrubbed on the way in.
+		The object branch has to scrub BEFORE it stringifies: scrubBag judges
+		by KEY, and once JSON.stringify has run there are no keys left to
+		judge — so console.error('login failed', await res.json()) used to
+		store the whole body, access_token and all. The server backstop is
+		key-based too and never re-reads a breadcrumb string, so nothing
+		downstream caught it either. stringifyReason() refuses to serialise a
+		rejection value for the same reason. */
 	function formatArgs(args) {
 		var parts = [];
 		for (var i = 0; i < args.length && i < 3; i++) {
 			var value = args[i];
 			if (typeof value === 'string') {
-				parts.push(value);
+				parts.push(scrubBag(value, 0));
 			} else if (value instanceof Error) {
-				parts.push(value.name + ': ' + value.message);
+				parts.push(value.name + ': ' + scrubBag(value.message, 0));
 			} else {
 				try {
-					parts.push(JSON.stringify(value));
+					parts.push(JSON.stringify(scrubBag(value, 0)));
 				} catch (circular) {
 					parts.push(String(value));
 				}
@@ -1709,10 +1746,30 @@
 		return value.length > max ? value.slice(0, max) : value;
 	}
 	
+	/** named, so a second init() cannot register a second copy of it */
+	function onVisibilityChange() {
+		if (document.visibilityState === 'hidden') {
+			flush();
+		}
+	}
+
 	function schedule() {
 		if (!flushTimer) {
 			flushTimer = setTimeout(flush, config.flushDelay);
 		}
+	}
+
+	/** Entries that did not fit this body, put back at the FRONT so they keep
+		their order and go out next — with a flush scheduled for them, since
+		the one that trimmed them has already taken the queue. A single report
+		bigger than the cap is never trimmed (the loops stop at length > 1), so
+		this cannot spin. */
+	function requeue(entries) {
+		if (entries.length === 0) {
+			return;
+		}
+		queue = entries.concat(queue);
+		schedule();
 	}
 	
 	// syslog priority -> OTLP severityNumber band (higher = more severe
@@ -1890,26 +1947,35 @@
 			
 			var batch = queue;
 			queue = [];
-			
+
+			// Entries trimmed to make the body fit go BACK on the queue. They
+			// used to be dropped on the floor, and seen[] and uniqueSent had
+			// already counted them — so a report that did not fit could never
+			// be sent again for that page load, and a later re-throw of the
+			// same error only incremented a count nobody would ever receive.
+			var deferred = [];
+
 			if (config.otlp) {
 				// trim against the FINAL body: the OTLP envelope inflates
 				// entries well past their report size, and a keepalive fetch
 				// hard-fails over the ~64 KiB quota instead of degrading
 				var otlpBody = JSON.stringify(toOtlp(batch));
 				while (otlpBody.length > config.maxBytes && batch.length > 1) {
-					batch.pop();
+					deferred.unshift(batch.pop());
 					otlpBody = JSON.stringify(toOtlp(batch));
 				}
+				requeue(deferred);
 				sendOtlp(otlpBody);
 				return;
 			}
-			
+
 			var body = JSON.stringify(batch);
 			while (body.length > config.maxBytes && batch.length > 1) {
-				batch.pop();
+				deferred.unshift(batch.pop());
 				body = JSON.stringify(batch);
 			}
-			
+			requeue(deferred);
+
 			var endpoint = config.url + '/api/v1/ingest/js/' + encodeURIComponent(config.key);
 			
 			// text/plain keeps it a "simple" request: no CORS preflight,
@@ -1924,7 +1990,12 @@
 					method: 'POST',
 					body: body,
 					headers: {'Content-Type': 'text/plain'},
-					keepalive: true,
+					// same quota guard sendOtlp() uses: keepalive rejects a
+					// body over ~64 KiB OUTRIGHT rather than degrading, and
+					// this line is only reached because sendBeacon already
+					// refused for that very reason — so insisting on keepalive
+					// threw the report away on a page that was still alive
+					keepalive: body.length <= 60000,
 				}).catch(function () {});
 			}
 		} catch (ignored) {}

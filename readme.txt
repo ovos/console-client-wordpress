@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.1
+Stable tag: 0.4.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,12 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.4.2 =
+* Security: `console.error('...', obj)` breadcrumbs are scrubbed properly. The object was serialised to JSON BEFORE the scrubber saw it, and the scrubber judges by field NAME — a JSON string has no names left to judge — so logging a failed response body recorded it whole, access token included. The server-side backstop is name-based too and never re-reads a breadcrumb, so nothing downstream caught it either.
+* Fix: error reports that do not fit one request are no longer lost. When a batch exceeded the send limit the surplus reports were dropped, and because they had already been counted against the per-page cap they could never be sent again — a later re-throw of the same error only bumped a counter nobody would receive. They are now carried over to the next batch.
+* Fix: loading the client twice (a theme or another plugin calling it as well) no longer records every navigation twice, which halved the useful length of the breadcrumb trail.
+* Fix: an over-sized report is sent instead of being thrown away. The browser refuses a "keepalive" request over ~64 KB outright rather than sending it slowly, and that flag was set even on the fallback path that is only reached BECAUSE the payload was too big — so the report was lost on a page that was still open.
 
 = 0.4.1 =
 * Fix: URL redaction no longer eats readable page paths. The bundled browser client shipped a rule that redacted ANY path segment of 24+ characters, which is also what a long slug looks like — so a page like /de/anmeldung-und-registrierung/ was reported as /de/[redacted]/ and the console's URI column stopped saying anything. A segment is now judged by its structure (a JWT, a uuid, a long hex string or one long run of mixed case with digits) rather than by its length alone.
