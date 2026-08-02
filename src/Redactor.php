@@ -275,19 +275,48 @@ final class Redactor
 	}
 
 	/**
+	 * A path segment ending in one of these is a static asset, not a
+	 * credential — see looksSecret().
+	 *
+	 * Build output and media only. `pdf`, `zip`, `csv`, `xlsx`, `json`, `xml`
+	 * and friends are deliberately absent: a signed one-time download link ends
+	 * in one of those, and none of them is ever emitted by a bundler.
+	 */
+	protected const ASSET_PATTERN = '~\.(?:js|mjs|cjs|jsx|ts|tsx|css|scss|less|map|wasm'
+		. '|woff2?|ttf|otf|eot'
+		. '|svg|png|jpe?g|gif|webp|avif|ico|bmp'
+		. '|mp3|mp4|webm|ogg|wav)$~i';
+
+	/**
 	 * See PATH_CANDIDATE: a generated token, not a slug. Where it is genuinely
 	 * ambiguous this errs towards redaction — an unreadable URI costs less than
 	 * a leaked reset token.
+	 *
+	 * A cache-busted STATIC ASSET is the exception, and not an ambiguous one:
+	 * every bundler names its output after a content hash (WordPress ships
+	 * plenty — main.<md5>.js, index-DkL9mQxZ8vB2nR4tY7wA.js), and each trips a
+	 * rule below on its 32-character or mixed-case run. Nothing was protected
+	 * by that: the browser fetched the file with no credential. It cost `file`,
+	 * which is the field a JS error is read from. A one-time credential in a
+	 * path is a bare segment; it does not end in .js.
 	 */
 	public static function looksSecret(
 		string $segment,
 	): bool
 	{
+		// before the asset rule: a uuid and a bare hex run hold no dot, so only
+		// a JWT could end in something that reads like an extension, and a JWT
+		// stays a JWT
 		if(preg_match('~^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$~', $segment) === 1
 			|| preg_match('~^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$~i', $segment) === 1
 			|| preg_match('~^[0-9a-f]{24,}$~i', $segment) === 1)
 		{
 			return true;
+		}
+
+		if(preg_match(self::ASSET_PATTERN, $segment) === 1)
+		{
+			return false;
 		}
 
 		if(strlen($segment) < 24)

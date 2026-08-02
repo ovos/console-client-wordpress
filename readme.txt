@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.2
+Stable tag: 0.4.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,12 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.4.3 =
+* New: errors thrown before the browser client finishes loading are no longer lost. The client file loads async (a slow console must never block the page), but its handlers only attached once it arrived — anything thrown in that window was gone, and that window sits exactly where the interesting errors live: first visits, cold caches, slow connections, broken deploys. The bootstrap now emits a tiny inline stub first, which buffers error and unhandledrejection events (resource load failures included) plus the init options; the refreshed bundled client drains the stub on arrival and replays the buffer through its normal filtering, so nothing is reported twice and nothing extra gets through. Manual captures made against the stub are replayed too.
+* Change: the client `<script>` tag is printed as a literal tag instead of being injected with `createElement` — the browser's preload scanner only discovers literal tags, so the fetch now starts while the HTML is still being parsed.
+* Bundled console-client.js refreshed (lockstep with the console): adds the stub drain; pages that include it synchronously behave exactly as before.
+* Fix: hashed asset filenames are no longer redacted. A JavaScript error names the file it came from, and every build tool names its output after a content hash — `main.<md5>.js`, `index-DkL9mQxZ8vB2nR4tY7wA.js`. Those look exactly like a generated token, so the redaction rule replaced them: reports arrived saying the error came from `/[redacted]`, which is the one thing on the report you cannot work without. Nothing was protected by it — the browser had just fetched the file over a plain, uncredentialed request. A segment ending in a script, style, font, image or media extension is now kept. One-time credentials in a URL path (`/reset/<token>`, `/invite/<token>`) are bare segments and are still redacted, as are token-shaped names ending in `.pdf` or `.zip`.
 
 = 0.4.2 =
 * Security: `console.error('...', obj)` breadcrumbs are scrubbed properly. The object was serialised to JSON BEFORE the scrubber saw it, and the scrubber judges by field NAME — a JSON string has no names left to judge — so logging a failed response body recorded it whole, access token included. The server-side backstop is name-based too and never re-reads a breadcrumb, so nothing downstream caught it either.

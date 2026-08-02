@@ -7,11 +7,16 @@ use function function_exists;
 use function rawurlencode;
 
 /**
- * Prints the async browser-client loader (the bo2go console.phtml
- * pattern): a slow or missing script never blocks the page, init runs
- * onload. The client itself is bundled — wordpress.org forbids loading
- * executable code from external servers, and a pinned copy beats
- * depending on the console instance being reachable at page load.
+ * Prints the async browser-client bootstrap: a pre-init stub that buffers
+ * error/unhandledrejection events (capture phase, so resource failures
+ * are seen too) plus the init() options, then a literal async <script>
+ * tag; the client drains the stub on arrival and replays the buffer
+ * through its normal filters. A slow or missing script never blocks the
+ * page, and errors thrown before it arrives are no longer lost. The
+ * client itself is bundled — wordpress.org forbids loading executable
+ * code from external servers, and a pinned copy beats depending on the
+ * console instance being reachable at page load; the ?ver= cache-buster
+ * keeps stub and client in lockstep (both ship with the plugin).
  */
 class JsClient
 {
@@ -89,19 +94,29 @@ class JsClient
 				. "}; };";
 		}
 		
-		// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- inline bootstrap script; every dynamic value is wp_json_encode()d
+		// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- inline bootstrap script; every dynamic value is wp_json_encode()d or esc_url()d
 		echo "<script>\n"
-			. "(function () {\n"
-			. "\tvar options = " . wp_json_encode($options, JSON_UNESCAPED_SLASHES) . ";" . $context . "\n"
-			. "\tvar script = document.createElement('script');\n"
-			. "\tscript.async = true;\n"
-			. "\tscript.src = " . wp_json_encode($src, JSON_UNESCAPED_SLASHES) . ";\n"
-			. "\tscript.onload = function () {\n"
-			. "\t\twindow.ovosConsole && window.ovosConsole.init(options);\n"
+			. "(function (w) {\n"
+			. "\tvar stub = {events: [], calls: [], options: null};\n"
+			. "\tstub.capture = function (event) {\n"
+			. "\t\tif (stub.events.length < 50) { stub.events.push(event); }\n"
 			. "\t};\n"
-			. "\tdocument.head.appendChild(script);\n"
-			. "})();\n"
-			. "</script>\n";
+			. "\tw.addEventListener('error', stub.capture, true);\n"
+			. "\tw.addEventListener('unhandledrejection', stub.capture);\n"
+			. "\tw.ovosConsole = {\n"
+			. "\t\tstub: stub,\n"
+			. "\t\tinit: function (options) { stub.options = options; },\n"
+			. "\t\tcaptureException: function () { stub.calls.push(['captureException'].concat([].slice.call(arguments))); },\n"
+			. "\t\tcaptureMessage: function () { stub.calls.push(['captureMessage'].concat([].slice.call(arguments))); },\n"
+			. "\t\tflush: function () {}\n"
+			. "\t};\n"
+			. "\tvar options = " . wp_json_encode($options, JSON_UNESCAPED_SLASHES) . ";" . $context . "\n"
+			. "\tw.ovosConsole.init(options);\n"
+			. "})(window);\n"
+			. "</script>\n"
+			// a literal tag, not createElement injection — the preload scanner
+			// only discovers literal tags, so the fetch starts during the parse
+			. '<script async src="' . esc_url($src) . '"></script>' . "\n";
 		// phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 }

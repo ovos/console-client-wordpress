@@ -12,6 +12,17 @@
  *     });
  *   </script>
  *
+ * Loading async (recommended — a slow or unreachable console then never
+ * blocks the page): emit the pre-init stub inline BEFORE the async script
+ * tag (canonical snippet in docs/CLIENT.md). The stub buffers window
+ * error/unhandledrejection events (capture phase, so resource failures are
+ * seen too), records the init() options and queues manual
+ * captureException/captureMessage calls while this file is in flight; on
+ * arrival this file swaps the stub out and replays the buffers through the
+ * normal handlers, so filtering (first-party allowlist, ignore, maxErrors,
+ * dedup) still runs in one place and the async gap loses nothing. Pages
+ * that include the file synchronously have no stub and behave as before.
+ *
  * Further options (all optional), by feature:
  *
  * - Filtering: maxErrors (10 unique per page load), ignore (RegExp[]
@@ -92,6 +103,8 @@
 	var navInstrumented = false;   // history/popstate wrapping is one-time
 	var clicksInstrumented = false;
 	var lifecycleBound = false;    // the window/document listeners init() adds
+	var pendingEvents = null;      // error events buffered by the async-loader stub
+	var pendingCalls = null;       // manual captures made against the stub API
 	
 	// Values of sensitive-looking query params -> [redacted]. Two groups, the
 	// same split the server backstop makes: names distinctive enough to match
@@ -174,16 +187,16 @@
 			// wiring is one-time.
 			if (!lifecycleBound) {
 				lifecycleBound = true;
-
+				
 				window.addEventListener('error', onError);
 				window.addEventListener('unhandledrejection', onRejection);
 				window.addEventListener('pagehide', flush);
 				document.addEventListener('visibilitychange', onVisibilityChange);
-
+				
 				// resource load failures do not bubble — capture phase only
 				window.addEventListener('error', onResourceError, true);
 			}
-
+			
 			if (config.instrumentFetch) {
 				instrumentFetch();
 			}
@@ -195,7 +208,47 @@
 				instrumentNav();
 				instrumentConsole();
 			}
+			
+			drainStub();
 		} catch (ignored) { /* never break the host page */ }
+	}
+	
+	// Replays what the async-loader stub buffered while this file was in
+	// flight: error/unhandledrejection events go through the regular
+	// handlers — so the first-party allowlist, ignore, maxErrors and dedup
+	// run here, in one place; the stub captures blindly — and queued manual
+	// captures re-run against the real API. Sits at the end of init()
+	// because the handlers need config, and one-shot: a re-init() to change
+	// config finds the buffers empty.
+	function drainStub() {
+		var events = pendingEvents;
+		var calls = pendingCalls;
+		var i;
+		pendingEvents = null;
+		pendingCalls = null;
+		
+		for (i = 0; events && i < events.length; i++) {
+			var event = events[i];
+			if (!event) {
+				continue;
+			}
+			if (event.type === 'unhandledrejection') {
+				onRejection(event);
+			} else if (window.ErrorEvent && event instanceof window.ErrorEvent) {
+				onError(event);
+			} else {
+				onResourceError(event);
+			}
+		}
+		
+		for (i = 0; calls && i < calls.length; i++) {
+			var call = calls[i];
+			if (call && call[0] === 'captureMessage') {
+				captureMessage(call[1], call[2], call[3]);
+			} else if (call && call[0] === 'captureException') {
+				captureException(call[1], call[2], call[3]);
+			}
+		}
 	}
 	
 	function onError(event) {
@@ -545,7 +598,7 @@
 				return;
 			}
 			navInstrumented = true;
-
+			
 			var record = function () {
 				crumb('nav', {url: scrub(location.href, 200)});
 			};
@@ -1442,12 +1495,31 @@
 		by - or _, lower case, at most the odd year; a token is one long run of
 		mixed case and digits, a uuid, a JWT, or a long hex string. Erring
 		towards redaction on the ambiguous ones: a leaked reset token costs more
-		than an unreadable URI. */
+		than an unreadable URI.
+		
+		A cache-busted STATIC ASSET is the exception, and not an ambiguous one.
+		Every bundler names its output after a content hash —
+		base_bf6051fdf10449dbde8945baf61cdf14.1785056998.js (this CMS),
+		main.<md5>.js (webpack), index-DkL9mQxZ8vB2nR4tY7wA.js (vite) — and each
+		trips a rule below on its 32-character or mixed-case run. Redacting them
+		protected nothing: the browser fetched the file with no credential and
+		every CDN on the way holds a copy. It cost the `file` field, which is
+		what a JS error is read from — 273 leadersnet occurrences stored
+		".../[redacted]?group=true", unable to say WHICH bundle threw. A
+		one-time credential in a path is a bare segment (/invite/<token>,
+		/reset-password/<jwt>); it does not end in .js. */
+	var ASSET_PATH = /\.(?:js|mjs|cjs|jsx|ts|tsx|css|scss|less|map|wasm|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|avif|ico|bmp|mp3|mp4|webm|ogg|wav)$/i;
 	function looksSecret(segment) {
+		// before the asset rule: a uuid and a bare hex run hold no dot, so only
+		// a JWT could end in something that reads like an extension, and a JWT
+		// stays a JWT
 		if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(segment)
 			|| /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)
 			|| /^[0-9a-f]{24,}$/i.test(segment)) {
 			return true;
+		}
+		if (ASSET_PATH.test(segment)) {
+			return false;
 		}
 		if (segment.length < 24) {
 			return false;
@@ -1752,13 +1824,13 @@
 			flush();
 		}
 	}
-
+	
 	function schedule() {
 		if (!flushTimer) {
 			flushTimer = setTimeout(flush, config.flushDelay);
 		}
 	}
-
+	
 	/** Entries that did not fit this body, put back at the FRONT so they keep
 		their order and go out next — with a flush scheduled for them, since
 		the one that trimmed them has already taken the queue. A single report
@@ -1947,14 +2019,14 @@
 			
 			var batch = queue;
 			queue = [];
-
+			
 			// Entries trimmed to make the body fit go BACK on the queue. They
 			// used to be dropped on the floor, and seen[] and uniqueSent had
 			// already counted them — so a report that did not fit could never
 			// be sent again for that page load, and a later re-throw of the
 			// same error only incremented a count nobody would ever receive.
 			var deferred = [];
-
+			
 			if (config.otlp) {
 				// trim against the FINAL body: the OTLP envelope inflates
 				// entries well past their report size, and a keepalive fetch
@@ -1968,14 +2040,14 @@
 				sendOtlp(otlpBody);
 				return;
 			}
-
+			
 			var body = JSON.stringify(batch);
 			while (body.length > config.maxBytes && batch.length > 1) {
 				deferred.unshift(batch.pop());
 				body = JSON.stringify(batch);
 			}
 			requeue(deferred);
-
+			
 			var endpoint = config.url + '/api/v1/ingest/js/' + encodeURIComponent(config.key);
 			
 			// text/plain keeps it a "simple" request: no CORS preflight,
@@ -2001,10 +2073,34 @@
 		} catch (ignored) {}
 	}
 	
+	// Async-loader stub takeover (docs/CLIENT.md): when a page loaded this
+	// file async, an inline stub is already on ovosConsole — buffering
+	// events and holding the init() options. Detach its blind listeners,
+	// publish the real API over the shim, then init with the recorded
+	// options; init() ends by draining the buffers. No task boundary exists
+	// between removeEventListener and init()'s addEventListener, so no
+	// event slips between them and none is seen twice. Synchronous
+	// includes have no stub — nothing changes for them.
+	var stub = window.ovosConsole && window.ovosConsole.stub;
+	
 	window.ovosConsole = {
 		init: init,
 		captureException: captureException,
 		captureMessage: captureMessage,
 		flush: flush,
 	};
+	
+	if (stub) {
+		try {
+			if (stub.capture) {
+				window.removeEventListener('error', stub.capture, true);
+				window.removeEventListener('unhandledrejection', stub.capture);
+			}
+			pendingEvents = stub.events || null;
+			pendingCalls = stub.calls || null;
+			if (stub.options) {
+				init(stub.options);
+			}
+		} catch (ignored) { /* never break the host page */ }
+	}
 })();
