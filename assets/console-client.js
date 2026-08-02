@@ -2088,6 +2088,11 @@
 		captureException: captureException,
 		captureMessage: captureMessage,
 		flush: flush,
+		// capability marker: this build drains the async-loader stub. Loaders
+		// that must work against older consoles too (ovos-play) probe it
+		// onload — absent means a pre-drain client swallowed the stub and
+		// never initialised, so such loaders fall back to init()ing directly.
+		stubAware: true,
 	};
 	
 	if (stub) {
