@@ -564,6 +564,13 @@ class Sender
 					'X-Console-Key: ' . $this->config->apiKey(),
 				],
 				CURLOPT_RETURNTRANSFER => true,
+				// a libcurl without the threaded resolver times sub-second
+				// timeouts via SIGALRM, which cannot do sub-second at all —
+				// it refuses with errno 28 BEFORE even resolving, losing
+				// every batch. NOSIGNAL switches to poll-based timing, where
+				// the 300ms connect bound works; only the DNS phase itself
+				// is then bounded by the system resolver instead.
+				CURLOPT_NOSIGNAL => true,
 				CURLOPT_CONNECTTIMEOUT_MS => 300,
 				CURLOPT_TIMEOUT_MS => 1000,
 				CURLOPT_SSL_VERIFYPEER => $verify,
