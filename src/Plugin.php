@@ -12,7 +12,7 @@ use function strtok;
  */
 final class Plugin
 {
-	public const VERSION = '0.4.4';
+	public const VERSION = '0.4.5';
 	
 	/**
 	 * Fixed 60-second cap on 404 access-event reports, so a hard scan cannot
@@ -57,6 +57,10 @@ final class Plugin
 		$this->sender->register();
 		
 		(new JsClient($this->config, $this->file))->register();
+		
+		// self-update from the plugin's GitHub releases, through core's
+		// own Update URI flow — no update server, no updater plugin
+		(new Updater($this->file))->register();
 		
 		// report front-end 404s as access events (opt-in) so scanner and
 		// broken-link traffic reaches the console apart from real errors

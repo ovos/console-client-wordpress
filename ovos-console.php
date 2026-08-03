@@ -3,7 +3,7 @@ declare(strict_types=1);
 /**
  * Plugin Name: ovos console
  * Description: Connects this site to an ovos/console error-monitoring instance — PHP and browser JavaScript errors, with grouping, alerting and issue lifecycle handled by the console.
- * Version: 0.4.4
+ * Version: 0.4.5
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: ovos media gmbh
@@ -11,6 +11,7 @@ declare(strict_types=1);
  * License: GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: ovos-console
+ * Update URI: https://github.com/ovos/console-client-wordpress
  */
 
 // this bootstrap file stays parseable on old PHP on purpose: the

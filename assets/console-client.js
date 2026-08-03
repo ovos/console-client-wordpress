@@ -27,8 +27,10 @@
  *
  * - Filtering: maxErrors (10 unique per page load), ignore (RegExp[]
  *   matched against messages), reportResourceErrors (false — report
- *   same-origin <script> load failures as errors), reportAborts (false —
- *   AbortError rejections are deliberate cancels), scrub (RegExp[]
+ *   same-origin <script> load failures as errors; webpack's lazy-chunk
+ *   failures (ChunkLoadError) follow the same switch — the same failed
+ *   download, repackaged by the bundler as a rejection), reportAborts
+ *   (false — AbortError rejections are deliberate cancels), scrub (RegExp[]
  *   applied to urls/referrers on top of the default sensitive-query-param
  *   redaction).
  * - Instrumentation: breadcrumbs (true), maxBreadcrumbs (20),
@@ -376,6 +378,20 @@
 			return;
 		}
 		if (isIgnored(error.message)) {
+			return;
+		}
+		
+		// a chunk failure is a failed script DOWNLOAD, not broken code:
+		// webpack rejects with ChunkLoadError when a lazy chunk times out on
+		// the visitor's network or a stale page requests a hash a deploy has
+		// replaced — and the stack full of same-origin runtime frames walks
+		// it past isFirstParty. Same policy as onResourceError: a breadcrumb
+		// for the trail (the timeout/missing flavors fire no error event, so
+		// onResourceError never saw them), a report only when
+		// reportResourceErrors asked for broken script loads to be loud.
+		if (!config.reportResourceErrors && isChunkFailure(error.name, error.message)) {
+			var chunkSrc = /https?:\/\/[^\s)]+/.exec(String(error.message || ''));
+			crumb('resource', {tag: 'script', url: chunkSrc ? scrub(chunkSrc[0], 200) : ''});
 			return;
 		}
 		
@@ -1376,6 +1392,17 @@
 			}
 		}
 		return false;
+	}
+	
+	/** webpack's lazy-chunk failures: the JS-chunk runtime rejects with
+		ChunkLoadError (named so since webpack 4.29), the CSS-chunk runtimes
+		(mini-css-extract, webpack's native CSS) throw a plain Error whose
+		message carries the same shape — "Loading CSS chunk 7 failed.
+		(/css/x.css)". Matched loosely and case-insensitively: a message
+		quoting that exact phrase is talking about the same failure. */
+	var CHUNK_FAILURE = /Loading (?:CSS )?chunk \S+ failed/i;
+	function isChunkFailure(name, message) {
+		return name === 'ChunkLoadError' || CHUNK_FAILURE.test(String(message || ''));
 	}
 	
 	/** resource urls the page neither loads nor controls: browser extensions

@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.4
+Stable tag: 0.4.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,10 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.4.5 =
+* New: the plugin updates itself. The header now declares this repository as its `Update URI`, and WordPress core's own update flow (WP 5.8+) asks the plugin for its latest GitHub release — new versions appear under Dashboard → Updates and install like any directory plugin, straight from the release zip. The check is fire-and-forget (any failure just means "no update visible right now") and the GitHub answer is cached for twelve hours. Sites running 0.4.4 or older still need one last manual install of this version; every version after it arrives through the updater.
+* Change: webpack chunk-load failures (`ChunkLoadError`) are no longer reported as errors by default. A lazy chunk that times out on a visitor's stalled connection is a failed download, not broken code — one Elementor text-editor chunk alone produced 44 reports in a single evening — but webpack repackages the failure as a rejection whose same-origin runtime frames walked it past the first-party filter. The bundled client now routes it through the same policy as every other resource load failure: a breadcrumb on the trail (so the TypeErrors that follow still show their cause; the timeout flavor fires no error event, so the resource handler never saw it), and a full report only where `reportResourceErrors` opted broken script loads in — a `(missing:)` chunk right after a deploy is still the loud broken-deploy signal that switch exists for. Covers the CSS-chunk variant (`Loading CSS chunk … failed`) too.
 
 = 0.4.4 =
 * Fix: on hosts whose curl lacks the threaded DNS resolver, every error report was lost. Such builds time sub-second timeouts via SIGALRM, which cannot do sub-second at all — libcurl refused the sender's 300 ms connect bound outright ("remaining timeout of 300 too small to resolve via SIGALRM method") before even resolving the console's hostname, and the fire-and-forget contract swallowed the failure, so nothing ever arrived and nothing ever said why. The ingest call now sets CURLOPT_NOSIGNAL, which times the connect by polling instead; hosts with the threaded resolver behave exactly as before. Found on a shared-hosting box where the identical call succeeds in 36 ms once allowed to run.

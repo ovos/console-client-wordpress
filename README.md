@@ -19,6 +19,11 @@ Reports errors from a WordPress site to a self-hosted [ovos/console](https://www
 1. Download `ovos-console.zip` from the [releases page](../../releases).
 2. In wp-admin go to **Plugins → Add New Plugin → Upload Plugin**, choose the zip, install and activate.
 
+From 0.4.5 on the plugin keeps itself current: it checks this repository's
+releases through WordPress core's `Update URI` mechanism, so new versions show
+up under **Dashboard → Updates** and install like any directory plugin — no
+manual reinstalls after the first one.
+
 ### From git
 
 Clone into `wp-content/plugins` — the directory name must be `ovos-console`:
