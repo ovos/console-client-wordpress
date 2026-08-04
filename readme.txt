@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.5
+Stable tag: 0.4.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -41,6 +41,9 @@ Manual captures from theme or plugin code:
 3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
 
 == Changelog ==
+
+= 0.4.6 =
+* Fix: settings save on the first try. On a fresh install the very first "Save changes" dropped every checkbox back to unchecked — only the URL, the keys and the log level stuck — and the same boxes had to be ticked and saved a second time to hold. When the option row does not exist yet, WordPress core sanitizes the submission twice (update_option() falls through to add_option(), which sanitizes again — core ticket #21989), and the second pass fed the already-sanitized booleans back into a strict comparison built for the form's '1'/'0' strings, which quietly turned every true into false. The checkbox parsing now accepts both the raw form value and its sanitized boolean, so the double pass is harmless.
 
 = 0.4.5 =
 * New: the plugin updates itself. The header now declares this repository as its `Update URI`, and WordPress core's own update flow (WP 5.8+) asks the plugin for its latest GitHub release — new versions appear under Dashboard → Updates and install like any directory plugin, straight from the release zip. The check is fire-and-forget (any failure just means "no update visible right now") and the GitHub answer is cached for twelve hours. Sites running 0.4.4 or older still need one last manual install of this version; every version after it arrives through the updater.

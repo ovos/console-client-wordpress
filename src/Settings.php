@@ -93,18 +93,18 @@ class Settings
 		$stored = (array)get_option(Config::OPTION, []);
 		
 		$clean = [
-			'enabled' => ($input['enabled'] ?? '') === '1',
+			'enabled' => $this->truthy($input['enabled'] ?? ''),
 			'url' => esc_url_raw(trim((string)($input['url'] ?? ''))),
 			'api_key' => trim((string)($input['api_key'] ?? '')),
 			'log_level' => max(0, min(7, (int)($input['log_level'] ?? Config::DEFAULTS['log_level']))),
-			'report_404' => ($input['report_404'] ?? '') === '1',
+			'report_404' => $this->truthy($input['report_404'] ?? ''),
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
-			'js_enabled' => ($input['js_enabled'] ?? '') === '1',
+			'js_enabled' => $this->truthy($input['js_enabled'] ?? ''),
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
-			'js_trace' => ($input['js_trace'] ?? '') === '1',
-			'snapshot' => ($input['snapshot'] ?? '') === '1',
-			'snapshot_styles' => ($input['snapshot_styles'] ?? '') === '1',
-			'js_admin' => ($input['js_admin'] ?? '') === '1',
+			'js_trace' => $this->truthy($input['js_trace'] ?? ''),
+			'snapshot' => $this->truthy($input['snapshot'] ?? ''),
+			'snapshot_styles' => $this->truthy($input['snapshot_styles'] ?? ''),
+			'js_admin' => $this->truthy($input['js_admin'] ?? ''),
 		];
 		
 		// write-only: a blank key keeps the stored one
@@ -123,6 +123,19 @@ class Settings
 		}
 		
 		return $clean;
+	}
+	
+	/**
+	 * Checkbox value → bool, tolerating an already-sanitized boolean: on the
+	 * first-ever save core routes update_option() into add_option(), which
+	 * sanitizes the sanitized array a second time (trac #21989) — a strict
+	 * '1' comparison would wipe every checked box back to false.
+	 */
+	protected function truthy(
+		mixed $value,
+	): bool
+	{
+		return $value === true || $value === '1';
 	}
 	
 	public function renderPage(): void
