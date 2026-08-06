@@ -12,7 +12,11 @@ Connects your site to an ovos/console error-monitoring instance — PHP and Java
 
 == Description ==
 
-This plugin reports errors from your WordPress site to a self-hosted [ovos/console](https://www.ovos.at) instance:
+This plugin reports errors from your WordPress site to a self-hosted [ovos console](https://ovos.github.io/console/) instance — one live dashboard for the errors of every site and service you run, grouped into issues, alerted and resolved, on infrastructure you control.
+
+See it working first: the [live demo](https://console-demo.ovos.at/) is a public instance filled with synthetic errors, no login required.
+
+What the plugin sends:
 
 * **PHP errors** — warnings, notices and fatals (uncaught exceptions included) are batched and posted once per request from the shutdown handler, after the response went out. Reporting never blocks or breaks the site: every failure is swallowed, the HTTP call has a hard 1 s timeout.
 * **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite). Same-origin calls carry a W3C traceparent header, so a failed browser request and the PHP error behind it share one trace id in the console.
@@ -36,9 +40,17 @@ Manual captures from theme or plugin code:
 
 == Installation ==
 
-1. Install and activate the plugin.
-2. In your console instance, create a project; note its secret API key and public JS key, and allowlist this site's origin for browser errors.
-3. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
+The plugin is distributed as a release zip from its [GitHub repository](https://github.com/ovos/console-client-wordpress) and updates itself from there afterwards.
+
+1. Download `ovos-console.zip` from the [latest release](https://github.com/ovos/console-client-wordpress/releases/latest) and install it under Plugins → Add New Plugin → Upload Plugin, or install it with WP-CLI:
+
+`wp plugin install https://github.com/ovos/console-client-wordpress/releases/latest/download/ovos-console.zip --activate`
+
+2. Activate the plugin.
+3. In your console instance, create a project; note its secret API key and public JS key, and allowlist this site's origin for browser errors.
+4. Enter the console URL and keys under Settings → ovos console, enable reporting, and use "Send test error" to verify the connection.
+
+From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
 
