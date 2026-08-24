@@ -68,7 +68,7 @@ wp plugin auto-updates enable ovos-console
 To install one specific version — a rollback, or pinning a fleet:
 
 ```sh
-wp plugin install https://github.com/ovos/console-client-wordpress/releases/download/v0.4.6/ovos-console.zip --force
+wp plugin install https://github.com/ovos/console-client-wordpress/releases/download/v0.5.0/ovos-console.zip --force
 ```
 
 ### From git
@@ -118,6 +118,7 @@ Every value lives under **Settings → ovos console** and can alternatively be s
 | API key | `OVOS_CONSOLE_API_KEY` | — | the project's secret api_key (PHP errors) |
 | Log level | `OVOS_CONSOLE_LOG_LEVEL` | `4` | send errors with syslog priority ≤ this (0 emergency … 7 debug) |
 | Report 404s | `OVOS_CONSOLE_REPORT_404` | `false` | front-end not-found requests as access events — rate-limited, static assets ignored, never turned into issues |
+| Traffic rollups | `OVOS_CONSOLE_ROLLUPS` | `false` | anonymous per-minute request counters (status / method / resolved page type / logged-in splits, no URLs or visitor data) so the console reads probe counts as rates — requires the APCu extension (silently inert without it) and the project's rollups switch |
 | Release label | `OVOS_CONSOLE_RELEASE` | — | optional deploy label (git sha, version), max 64 chars |
 | Report JS errors | `OVOS_CONSOLE_JS_ENABLED` | `true` | loads the bundled browser client on the front end |
 | JS key | `OVOS_CONSOLE_JS_KEY` | — | the project's public js_key (browser errors) |

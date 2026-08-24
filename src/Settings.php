@@ -98,6 +98,7 @@ class Settings
 			'api_key' => trim((string)($input['api_key'] ?? '')),
 			'log_level' => max(0, min(7, (int)($input['log_level'] ?? Config::DEFAULTS['log_level']))),
 			'report_404' => $this->truthy($input['report_404'] ?? ''),
+			'rollups' => $this->truthy($input['rollups'] ?? ''),
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
 			'js_enabled' => $this->truthy($input['js_enabled'] ?? ''),
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
@@ -169,6 +170,9 @@ class Settings
 		$this->checkboxField('report_404',
 			__('Report 404s', 'ovos-console'),
 			__('Report front-end not-found (404) requests as access events. Surfaces scanner and broken-link traffic in the console, grouped apart from real errors and never creating issues. Rate-limited, and static-asset 404s are ignored.', 'ovos-console'));
+		$this->checkboxField('rollups',
+			__('Traffic rollups', 'ovos-console'),
+			__('Send anonymous per-minute traffic counters (request totals split by status, method, resolved page type and logged-in state — never URLs or visitor data), so the console can read error and probe counts as rates. Requires the APCu PHP extension and the project\'s rollups switch in the console; without APCu nothing is collected or sent.', 'ovos-console'));
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
 			__('Optional deploy label (git sha, version), max 64 characters.', 'ovos-console'));

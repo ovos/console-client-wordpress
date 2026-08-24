@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.6
+Stable tag: 0.5.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -53,6 +53,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.0 =
+* New: optional traffic rollups. When enabled (Settings → ovos console → "Traffic rollups", off by default, lockable via `OVOS_CONSOLE_ROLLUPS`), the plugin sends anonymous per-minute request counters to the console — totals split by response status, HTTP method, the page type WordPress resolved (front page, singular/{post_type}, archive, search, login, admin, REST…) and logged-in state. Never URLs, IPs or visitor data: a request answered 404 counts only as "matched nothing", which is exactly the scanner-probe signal the console's attack detection reads as a rate instead of a raw count. Requires the APCu PHP extension (counters accumulate in shared memory and ship once per minute as a single request — without APCu the feature is silently inert, never a slowdown) and the project's rollups switch in the console. Requests served entirely by a page-cache plugin before WordPress boots are not counted.
 
 = 0.4.6 =
 * Fix: settings save on the first try. On a fresh install the very first "Save changes" dropped every checkbox back to unchecked — only the URL, the keys and the log level stuck — and the same boxes had to be ticked and saved a second time to hold. When the option row does not exist yet, WordPress core sanitizes the submission twice (update_option() falls through to add_option(), which sanitizes again — core ticket #21989), and the second pass fed the already-sanitized booleans back into a strict comparison built for the form's '1'/'0' strings, which quietly turned every true into false. The checkbox parsing now accepts both the raw form value and its sanitized boolean, so the double pass is harmless.

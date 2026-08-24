@@ -28,6 +28,7 @@ class Config
 		'api_key' => '',
 		'log_level' => 4,
 		'report_404' => false,
+		'rollups' => false,
 		'release' => '',
 		'js_enabled' => true,
 		'js_key' => '',
@@ -98,6 +99,11 @@ class Config
 	public function report404(): bool
 	{
 		return (bool)$this->get('report_404');
+	}
+	
+	public function rollups(): bool
+	{
+		return (bool)$this->get('rollups');
 	}
 	
 	public function release(): string

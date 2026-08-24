@@ -12,7 +12,7 @@ use function strtok;
  */
 final class Plugin
 {
-	public const VERSION = '0.4.6';
+	public const VERSION = '0.5.0';
 	
 	/**
 	 * Fixed 60-second cap on 404 access-event reports, so a hard scan cannot
@@ -55,6 +55,13 @@ final class Plugin
 	protected function register(): void
 	{
 		$this->sender->register();
+		
+		// per-minute traffic rollups (opt-in, APCu-gated) — registered after
+		// the Sender so its shutdown handler runs once error flushing is done
+		if($this->config->rollups())
+		{
+			(new Rollup($this->config))->register();
+		}
 		
 		(new JsClient($this->config, $this->file))->register();
 		
