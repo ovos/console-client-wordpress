@@ -5,6 +5,7 @@ Reports errors from a WordPress site to a self-hosted [ovos console](https://ovo
 - **PHP errors** — warnings, notices and fatals (uncaught exceptions included), batched into a single POST from the shutdown handler after the response went out. Fire-and-forget: every failure is swallowed, the HTTP call has a hard 1 s timeout — reporting can never break or noticeably slow the site.
 - **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite).
 - **Context** — request variables (redacted before sending), logged-in user id, WordPress version, active theme, and source attribution: each error is tagged with the plugin or theme its file lives in.
+- **Traffic rollups (opt-in)** — anonymous per-minute request counters, so the console can read error and scanner-probe counts as *rates* against real traffic instead of raw numbers. Never URLs, IPs or visitor data — see [Traffic rollups](#traffic-rollups) below. Requires the APCu PHP extension.
 
 ## The console
 
@@ -68,7 +69,7 @@ wp plugin auto-updates enable ovos-console
 To install one specific version — a rollback, or pinning a fleet:
 
 ```sh
-wp plugin install https://github.com/ovos/console-client-wordpress/releases/download/v0.5.0/ovos-console.zip --force
+wp plugin install https://github.com/ovos/console-client-wordpress/releases/download/v0.4.7/ovos-console.zip --force
 ```
 
 ### From git
@@ -136,6 +137,50 @@ define('OVOS_CONSOLE_API_KEY', '...');
 define('OVOS_CONSOLE_JS_KEY', '...');
 define('OVOS_CONSOLE_RELEASE', '2026.07.13');
 ```
+
+### Traffic rollups
+
+Error reports alone have no denominator: "37 requests for pages this site
+does not serve" reads very differently on 50 000 requests a minute than on
+200. With rollups enabled, the plugin counts every request WordPress handles
+into per-minute counters — request total, split by response status, HTTP
+method, the *page type* WordPress resolved (front page, `singular/{post_type}`,
+`archive/{taxonomy}`, search, login, admin, REST, …) and logged-in state —
+and ships each completed minute as **one** small POST to the console. A
+request answered 404 counts only as "matched nothing", which is exactly the
+scanner-probe signal the console's attack detection reads as a rate.
+
+What deliberately never travels: URLs, query strings, IP addresses, user
+agents, cookies, or anything else request-derived — the counter names come
+from a closed vocabulary WordPress itself defines, so the payload is
+structurally incapable of carrying visitor data.
+
+Enabling it takes **two switches** (either one off keeps the feature inert):
+
+1. **In WordPress:** Settings → ovos console → *Traffic rollups*, or lock it
+   in `wp-config.php`:
+
+   ```php
+   define('OVOS_CONSOLE_ROLLUPS', true);
+   ```
+
+2. **In the console:** tick *Traffic rollups* (`rollups_enabled`) on the
+   project — a sender posting to a project without it is refused and stays
+   inert, so enabling the two sides in either order is safe.
+
+Requirements and caveats:
+
+- **APCu is required** (the `apcu` PHP extension, enabled for the web SAPI).
+  Counters accumulate in APCu shared memory and one request per minute ships
+  them; without APCu the feature is a silent no-op — no counting, no sends,
+  no errors — because a WordPress host without shared memory could only
+  produce undercounted numbers, and a wrong denominator is worse than none.
+- Requests served entirely by a page-cache plugin (or a CDN) before WordPress
+  boots are not counted — cached traffic never reaches PHP. Probe traffic is
+  never a cache hit, so the attack signal is unaffected.
+- Overhead is one APCu increment set per request (sub-microsecond, no I/O)
+  plus a single sub-second POST per minute of traffic, sent after the
+  response went out.
 
 ### Self-signed console certificate
 
