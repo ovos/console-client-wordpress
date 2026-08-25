@@ -12,7 +12,7 @@ use function strtok;
  */
 final class Plugin
 {
-	public const VERSION = '0.4.7';
+	public const VERSION = '0.4.8';
 	
 	/**
 	 * Fixed 60-second cap on 404 access-event reports, so a hard scan cannot
@@ -74,6 +74,13 @@ final class Plugin
 		if($this->config->report404())
 		{
 			add_action('template_redirect', [$this, 'reportNotFound']);
+		}
+		
+		// report refused actions (failed logins, rejected nonces, forbidden
+		// REST calls, sensitive admin changes) as security events (opt-in)
+		if($this->config->securityEvents())
+		{
+			(new Security($this->sender))->register();
 		}
 		
 		if(is_admin())

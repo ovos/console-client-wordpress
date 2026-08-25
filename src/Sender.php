@@ -55,6 +55,26 @@ use const PHP_URL_HOST;
  */
 class Sender
 {
+	/**
+	 * The closed security-event vocabulary — must mirror the console's
+	 * App::SECURITY_KINDS exactly; the console refuses unknown kinds
+	 * wholesale, so this list only grows in a deliberate two-sided change
+	 */
+	public const SECURITY_KINDS = [
+		'auth_failure',
+		'csrf_reject',
+		'permission_denied',
+		'rate_limited',
+		'validation_refused',
+		'privileged_action',
+	];
+	
+	/**
+	 * Fixed 60-second cap on security-event reports, so a credential-stuffing
+	 * run cannot turn this reporter into the flood it is meant to surface
+	 */
+	protected const MAX_SECURITY_PER_MINUTE = 60;
+	
 	protected const MAX_QUEUE = 100;
 	
 	protected const MAX_BATCH = 50;
@@ -177,6 +197,77 @@ class Sender
 	}
 	
 	/**
+	 * Reports a refused action as a type=security event (priority 6, INFO) —
+	 * what was REFUSED, beside what broke: failed logins, rejected nonce
+	 * checks, forbidden REST calls, sensitive admin changes. $kind must come
+	 * from SECURITY_KINDS (the console refuses unknown kinds; anything else
+	 * is a silent no-op) and rides events[0].className, the same slot an
+	 * exception's class occupies. No-op unless the security_events setting
+	 * is on; rate-capped so an attack cannot flood its own report channel.
+	 * The console accepts these apart from the project's severity threshold
+	 * (a kind, not a severity) but has its own per-project off switch.
+	 */
+	public function reportRefusal(
+		string $kind,
+		string $message = '',
+		array $extra = [],
+	): void
+	{
+		if($this->config->securityEvents() === false
+			|| in_array($kind, self::SECURITY_KINDS, true) === false
+			|| count($this->queue) >= self::MAX_QUEUE
+			|| $this->allowSecurity() === false)
+		{
+			return;
+		}
+		
+		try
+		{
+			$message = $message !== ''
+				? Redactor::maskEmails(mb_substr($message, 0, 512))
+				: $kind;
+				
+			$payload = Payload::fromMessage($message, 6, $extra);
+			$payload['type'] = 'security';
+			$payload['events'] = [
+				[
+					'message' => $message,
+					'className' => $kind,
+					'file' => '',
+					'line' => 0,
+					'backtrace' => '',
+					'previous' => false,
+				],
+			];
+			
+			$this->queue[] = $payload;
+		}
+		catch(Throwable)
+		{
+			// never break the host site
+		}
+	}
+	
+	/**
+	 * Fixed 60-second window cap on security reports (a transient counter,
+	 * same mechanism as the 404 throttle)
+	 */
+	protected function allowSecurity(): bool
+	{
+		$key = 'ovos_console_security_rate';
+		$count = (int)get_transient($key);
+		
+		if($count >= self::MAX_SECURITY_PER_MINUTE)
+		{
+			return false;
+		}
+		
+		set_transient($key, $count + 1, 60);
+		
+		return true;
+	}
+	
+	/**
 	 * set_error_handler callback — captures, then hands over to the
 	 * previous handler (or to PHP's own, by returning false)
 	 */
@@ -252,9 +343,11 @@ class Sender
 			
 			foreach($this->queue as $payload)
 			{
-				// a 404 access event rides the INFO band but is a KIND, not a
-				// severity — the log_level gate (a severity filter) must not drop it
-				if(($payload['type'] ?? '') !== '404'
+				// 404 access events and security events ride the INFO band but
+				// are KINDS, not severities — the log_level gate (a severity
+				// filter) must not drop them
+				$type = (string)($payload['type'] ?? '');
+				if($type !== '404' && $type !== 'security'
 					&& $payload['priority'] > $logLevel)
 				{
 					continue;

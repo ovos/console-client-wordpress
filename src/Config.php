@@ -29,6 +29,7 @@ class Config
 		'log_level' => 4,
 		'report_404' => false,
 		'rollups' => false,
+		'security_events' => false,
 		'release' => '',
 		'js_enabled' => true,
 		'js_key' => '',
@@ -104,6 +105,11 @@ class Config
 	public function rollups(): bool
 	{
 		return (bool)$this->get('rollups');
+	}
+	
+	public function securityEvents(): bool
+	{
+		return (bool)$this->get('security_events');
 	}
 	
 	public function release(): string

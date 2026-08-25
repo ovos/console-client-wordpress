@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.7
+Stable tag: 0.4.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -22,6 +22,7 @@ What the plugin sends:
 * **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite). Same-origin calls carry a W3C traceparent header, so a failed browser request and the PHP error behind it share one trace id in the console.
 * **Context** — request variables (redacted before sending), logged-in user id, WordPress version, active theme, and source attribution: each error is tagged with the plugin or theme its file lives in.
 * **Traffic rollups (opt-in)** — anonymous per-minute request counters: totals split by response status, HTTP method, the page type WordPress resolved (front page, post type, archive, search, login, admin, REST) and logged-in state. Never URLs, IPs or visitor data. They give the console a denominator, so error and scanner-probe counts read as rates against real traffic — a request answered 404 counts only as "matched nothing", which is exactly the probe signal. Requires the APCu PHP extension (counters accumulate in shared memory, one small POST per minute of traffic; without APCu the feature is silently inert). Enable it under Settings → ovos console (or `OVOS_CONSOLE_ROLLUPS`) *and* on the console project — either switch off keeps it inert. Requests served by a page-cache plugin before WordPress boots are not counted.
+* **Security events (opt-in)** — what WordPress *refused*, beside what broke: failed logins from any door (wp-login form, XML-RPC, application passwords — the username is masked to its first character), rejected nonce checks (the CSRF signal), REST calls answered 401/403 (permission probing), and sensitive admin changes worth an audit trail — role grants, plugin installs and activations, changes to the signup, site-URL and admin-e-mail options. They arrive in the console as informational `security` events, grouped apart from errors and accepted independently of the project's severity threshold; they raise no alerts by default and feed the console's attack detection. Capped at 60 reports per minute so an attack cannot flood its own report channel. Enable it under Settings → ovos console (or `OVOS_CONSOLE_SECURITY_EVENTS`).
 
 Configuration lives under Settings → ovos console, or in wp-config.php via `OVOS_CONSOLE_*` constants (which lock the corresponding UI field — handy for deploy-time configuration):
 
@@ -54,6 +55,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.4.8 =
+* New: optional security events. When enabled (Settings → ovos console → "Security events", off by default, lockable via `OVOS_CONSOLE_SECURITY_EVENTS`), the plugin reports what WordPress refused, beside what broke: failed logins from any door (wp-login form, XML-RPC, application passwords), rejected nonce checks, REST calls answered 401/403, and sensitive admin changes (role grants, plugin installs and activations, changes to the signup/site-URL/admin-e-mail options). Usernames are masked to their first character and e-mail addresses in messages are masked with the domain kept. The console accepts these as informational `security` events independent of the project's severity threshold — grouped apart from errors, no alerts by default, feeding its attack detection. Rate-limited to 60 reports per minute, so a credential-stuffing run cannot turn the reporter into the flood it surfaces.
 
 = 0.4.7 =
 * New: optional traffic rollups. When enabled (Settings → ovos console → "Traffic rollups", off by default, lockable via `OVOS_CONSOLE_ROLLUPS`), the plugin sends anonymous per-minute request counters to the console — totals split by response status, HTTP method, the page type WordPress resolved (front page, singular/{post_type}, archive, search, login, admin, REST…) and logged-in state. Never URLs, IPs or visitor data: a request answered 404 counts only as "matched nothing", which is exactly the scanner-probe signal the console's attack detection reads as a rate instead of a raw count. Requires the APCu PHP extension (counters accumulate in shared memory and ship once per minute as a single request — without APCu the feature is silently inert, never a slowdown) and the project's rollups switch in the console. Requests served entirely by a page-cache plugin before WordPress boots are not counted.

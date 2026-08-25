@@ -57,7 +57,7 @@ final class Redactor
 	 * was already masked; the key beside it was not.
 	 */
 	protected const QUERY_NAMES = ['key', 'auth', 'code', 'sig', 'signature'];
-
+	
 	/**
 	 * A path segment is a secret, not a slug, when it has no word structure and
 	 * carries the character mix a generated token does: a JWT, a uuid, a long
@@ -72,7 +72,7 @@ final class Redactor
 	 * a length-only version of this once redacted every German slug.
 	 */
 	protected const PATH_CANDIDATE = '~(/)([A-Za-z0-9_.-]{20,})(?=[/?#]|$)~';
-
+	
 	/**
 	 * An e-mail address inside a string value. The first local-part character
 	 * is kept and the domain is left intact (j***@example.com) — enough to tell
@@ -273,7 +273,7 @@ final class Redactor
 			$path,
 		);
 	}
-
+	
 	/**
 	 * A path segment ending in one of these is a static asset, not a
 	 * credential — see looksSecret().
@@ -286,7 +286,7 @@ final class Redactor
 		. '|woff2?|ttf|otf|eot'
 		. '|svg|png|jpe?g|gif|webp|avif|ico|bmp'
 		. '|mp3|mp4|webm|ogg|wav)$~i';
-
+		
 	/**
 	 * See PATH_CANDIDATE: a generated token, not a slug. Where it is genuinely
 	 * ambiguous this errs towards redaction — an unreadable URI costs less than
@@ -313,31 +313,36 @@ final class Redactor
 		{
 			return true;
 		}
-
+		
 		if(preg_match(self::ASSET_PATTERN, $segment) === 1)
 		{
 			return false;
 		}
-
+		
 		if(strlen($segment) < 24)
 		{
 			return false;
 		}
-
+		
 		$longest = 0;
 		foreach(preg_split('~[-_.]+~', $segment) ?: [] as $run)
 		{
 			$longest = max($longest, strlen($run));
 		}
-
+		
 		$digits = preg_match('~[0-9]~', $segment) === 1;
-
+		
 		// one long mixed-case run with digits, or a very long single run
 		return ($digits && preg_match('~[A-Z]~', $segment) === 1 && $longest >= 16)
 			|| ($digits && $longest >= 32);
 	}
-
-	protected static function maskName(
+	
+	/**
+	 * First character + *** — the identity mask for usernames (same format
+	 * the php-library sender uses), enough to tell accounts apart in a
+	 * grouped issue while dropping the identifying part
+	 */
+	public static function maskName(
 		string $value,
 	): string
 	{
@@ -347,5 +352,16 @@ final class Redactor
 		}
 		
 		return mb_substr($value, 0, 1) . '***';
+	}
+	
+	/**
+	 * Masks e-mail addresses inside a plain string (j***@example.com),
+	 * the domain kept — for message text that may quote an address
+	 */
+	public static function maskEmails(
+		string $value,
+	): string
+	{
+		return (string)preg_replace(self::EMAIL_PATTERN, '${1}***@${2}', $value);
 	}
 }

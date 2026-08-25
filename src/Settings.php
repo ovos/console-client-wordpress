@@ -99,6 +99,7 @@ class Settings
 			'log_level' => max(0, min(7, (int)($input['log_level'] ?? Config::DEFAULTS['log_level']))),
 			'report_404' => $this->truthy($input['report_404'] ?? ''),
 			'rollups' => $this->truthy($input['rollups'] ?? ''),
+			'security_events' => $this->truthy($input['security_events'] ?? ''),
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
 			'js_enabled' => $this->truthy($input['js_enabled'] ?? ''),
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
@@ -173,6 +174,9 @@ class Settings
 		$this->checkboxField('rollups',
 			__('Traffic rollups', 'ovos-console'),
 			__('Send anonymous per-minute traffic counters (request totals split by status, method, resolved page type and logged-in state — never URLs or visitor data), so the console can read error and probe counts as rates. Requires the APCu PHP extension and the project\'s rollups switch in the console; without APCu nothing is collected or sent.', 'ovos-console'));
+		$this->checkboxField('security_events',
+			__('Security events', 'ovos-console'),
+			__('Report refused actions as security events, apart from errors: failed logins (any door — form, XML-RPC, application passwords, with the username masked), rejected nonce checks, forbidden REST calls, and sensitive admin changes (role grants, plugin installs and activations, signup/site-URL/admin-e-mail option changes). Informational by default in the console — they feed its attack detection without raising alerts. Rate-limited to 60 per minute.', 'ovos-console'));
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
 			__('Optional deploy label (git sha, version), max 64 characters.', 'ovos-console'));

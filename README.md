@@ -6,6 +6,7 @@ Reports errors from a WordPress site to a self-hosted [ovos console](https://ovo
 - **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite).
 - **Context** — request variables (redacted before sending), logged-in user id, WordPress version, active theme, and source attribution: each error is tagged with the plugin or theme its file lives in.
 - **Traffic rollups (opt-in)** — anonymous per-minute request counters, so the console can read error and scanner-probe counts as *rates* against real traffic instead of raw numbers. Never URLs, IPs or visitor data — see [Traffic rollups](#traffic-rollups) below. Requires the APCu PHP extension.
+- **Security events (opt-in)** — what WordPress *refused*, beside what broke: failed logins, rejected nonce checks, forbidden REST calls, and sensitive admin changes. Usernames masked, rate-limited — see [Security events](#security-events) below.
 
 ## The console
 
@@ -120,6 +121,7 @@ Every value lives under **Settings → ovos console** and can alternatively be s
 | Log level | `OVOS_CONSOLE_LOG_LEVEL` | `4` | send errors with syslog priority ≤ this (0 emergency … 7 debug) |
 | Report 404s | `OVOS_CONSOLE_REPORT_404` | `false` | front-end not-found requests as access events — rate-limited, static assets ignored, never turned into issues |
 | Traffic rollups | `OVOS_CONSOLE_ROLLUPS` | `false` | anonymous per-minute request counters (status / method / resolved page type / logged-in splits, no URLs or visitor data) so the console reads probe counts as rates — requires the APCu extension (silently inert without it) and the project's rollups switch |
+| Security events | `OVOS_CONSOLE_SECURITY_EVENTS` | `false` | refused actions as informational `security` events — failed logins (username masked), rejected nonce checks, REST 401/403s, sensitive admin changes; rate-limited to 60/min |
 | Release label | `OVOS_CONSOLE_RELEASE` | — | optional deploy label (git sha, version), max 64 chars |
 | Report JS errors | `OVOS_CONSOLE_JS_ENABLED` | `true` | loads the bundled browser client on the front end |
 | JS key | `OVOS_CONSOLE_JS_KEY` | — | the project's public js_key (browser errors) |
@@ -181,6 +183,46 @@ Requirements and caveats:
 - Overhead is one APCu increment set per request (sub-microsecond, no I/O)
   plus a single sub-second POST per minute of traffic, sent after the
   response went out.
+
+### Security events
+
+Errors say what *broke*; security events say what was *refused* — and refusals
+are where an attack is visible before anything breaks. With the switch on, the
+plugin reports:
+
+- **Failed logins** (`auth_failure`) — every door funnels through the same
+  hook: the wp-login form, XML-RPC, REST basic auth, and rejected application
+  passwords. The username is masked to its first character (`m***`); the
+  reason travels as WordPress' error codes (`invalid_username`,
+  `incorrect_password`), never as core's HTML error messages.
+- **Rejected nonce checks** (`csrf_reject`) — a failed `check_admin_referer` /
+  `check_ajax_referer` is the CSRF signal (or an expired-session replay);
+  the nonce action name says which form was targeted.
+- **Forbidden REST calls** (`permission_denied`) — REST requests answered
+  401/403, the shape of user enumeration and capability probing; reported
+  with the error code and route.
+- **Sensitive admin changes** (`privileged_action`) — the moves an attacker
+  makes *after* getting in, routine for an admin but an audit trail during an
+  incident: user role changes, plugin activations, plugin/theme/core installs
+  and updates, and changes to the `users_can_register`, `default_role`,
+  `admin_email`, `siteurl` and `home` options (the option *name* only — values
+  are deliberately not reported).
+
+They arrive in the console as informational `security` events (priority 6),
+grouped apart from errors: accepted independently of the project's severity
+threshold, never turned into issues or alerts by default, feeding the
+console's attack detection. Reports are capped at 60 per minute — a
+credential-stuffing run cannot turn the reporter into the flood it surfaces.
+
+Enable it under Settings → ovos console → *Security events*, or lock it in
+`wp-config.php`:
+
+```php
+define('OVOS_CONSOLE_SECURITY_EVENTS', true);
+```
+
+The console side is on by default for every project (the per-project
+*Security events* switch under the project's Data tab is the off switch).
 
 ### Self-signed console certificate
 
