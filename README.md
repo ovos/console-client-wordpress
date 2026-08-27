@@ -192,7 +192,10 @@ plugin reports:
 
 - **Failed logins** (`auth_failure`) — every door funnels through the same
   hook: the wp-login form, XML-RPC, REST basic auth, and rejected application
-  passwords. The username is masked to its first character (`m***`); the
+  passwords. The username is masked to every fourth character, the rest
+  starred (`marcin` -> `m***i*`), so the line keeps the length — and past 24
+  characters it states the real length instead (`x***x***...[4000]`), which is
+  what a credential-stuffing probe looks like; the
   reason travels as WordPress' error codes (`invalid_username`,
   `incorrect_password`), never as core's HTML error messages.
 - **Rejected nonce checks** (`csrf_reject`) — a failed `check_admin_referer` /

@@ -128,13 +128,27 @@
 	// an e-mail address (plain or %40-encoded) anywhere -> first char + domain
 	// kept (j***@example.com)
 	var EMAIL_VALUE = /([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@|%40)([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
-	// anchored username-ish query params -> first char + *** (the lookahead
-	// skips values the e-mail mask already handled)
-	var SCRUB_USER_PARAMS = /([?&#](?:user(?:[_-]?(?:name|login))?|login)=)(?![^&#]*\*{3})([^&#])[^&#]*/gi;
+	// anchored username-ish query params -> maskName() (the lookahead skips
+	// values the e-mail mask already handled)
+	var SCRUB_USER_PARAMS = /([?&#](?:user(?:[_-]?(?:name|login))?|login)=)(?![^&#]*\*{3})([^&#]+)/gi;
 	// secret-named keys of the extra bag -> [redacted]
 	var SCRUB_KEYS = /pass(word|wd)?|pwd|token|secret|authorization|cookie|api[-_]?key/i;
-	// anchored username keys of the extra bag -> first char + ***
+	// anchored username keys of the extra bag -> maskName()
 	var USER_KEYS = /^(user([_-]?(name|login))?|login)$/i;
+	
+	// maskName() keeps every MASK_GROUP-th character of a value and stars the
+	// rest, up to MASK_MAX characters; past the cut it states the real length
+	// instead ("[200]"). Mirrors MASK_GROUP in the node client, the
+	// server-side backstop (Scrubber) and ovos/php-library — the four answers
+	// must agree, or one event means different things depending on which
+	// client sent it.
+	var MASK_GROUP = 4;
+	var MASK_MAX = 24;
+	// a mask that was cut: re-masking it would measure the mask (29 for a value
+	// of 200), so maskName() returns this form untouched. Brackets like
+	// [redacted] — and the php senders un-encode them again, so a cut mask
+	// stays readable in a scrubbed url
+	var MASKED_CUT = /^(?:.\*{3})+\[\d+\]$/;
 	
 	var DEFAULTS = {
 		url: '',
@@ -1567,9 +1581,11 @@
 		try {
 			value = value.replace(SCRUB_PARAMS, '$1[redacted]');
 			// e-mail values in any remaining param or path segment (domain
-			// kept), then username-named params down to their first character
+			// kept), then username-named params down to their masked groups
 			value = value.replace(EMAIL_VALUE, '$1***$2$3');
-			value = value.replace(SCRUB_USER_PARAMS, '$1$2***');
+			value = value.replace(SCRUB_USER_PARAMS, function (match, prefix, name) {
+				return prefix + maskName(name);
+			});
 			value = value.replace(SCRUB_PATH, function (match, slash, segment) {
 				return looksSecret(segment) ? slash + '[redacted]' : match;
 			});
@@ -1597,7 +1613,7 @@
 	
 	/** extra bag (and nested request bags): secret-named keys dropped,
 		e-mail values masked (domain kept), username keys masked to their
-		first character */
+		groups (maskName) */
 	function scrubBag(bag, depth) {
 		try {
 			if (typeof bag === 'string') {
@@ -1638,9 +1654,24 @@
 		}
 	}
 	
-	/** first character + *** — fixed suffix, no length leak */
+	/** every MASK_GROUP-th character kept, the rest starred (bob -> b**,
+		marcin -> m***i*): the mask is as long as the value it replaced, and
+		past MASK_MAX it states the real length instead ("[200]") — a login
+		field holding thousands of characters is someone trying something.
+		Masking a mask is a no-op; the server-side backstop scrubs an
+		already-scrubbed report again */
 	function maskName(value) {
-		return value === '' ? '' : value.charAt(0) + '***';
+		if (MASKED_CUT.test(value)) {
+			return value;
+		}
+		
+		var cut = Math.min(value.length, MASK_MAX);
+		var masked = '';
+		for (var index = 0; index < cut; index++) {
+			masked += index % MASK_GROUP === 0 ? value.charAt(index) : '*';
+		}
+		
+		return value.length > cut ? masked + '[' + value.length + ']' : masked;
 	}
 	
 	/** host-aware path of a request url — the grouping key for failed calls.

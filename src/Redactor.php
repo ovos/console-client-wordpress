@@ -8,7 +8,9 @@ use function is_array;
 use function is_string;
 use function ltrim;
 use function max;
+use function mb_strlen;
 use function mb_substr;
+use function min;
 use function preg_match;
 use function preg_replace;
 use function preg_replace_callback;
@@ -40,12 +42,36 @@ final class Redactor
 		'/pass(word|wd)?|pwd|token|secret|authorization|cookie|api[-_]key/i';
 	
 	/**
-	 * Field names whose value is masked to all-but-the-first character
-	 * (e.g. "marcin" -> "m***"). Includes WordPress's own login field names —
+	 * Field names whose value is masked to every MASK_GROUP-th character, the
+	 * rest starred (e.g. "bob" -> "b**", "marcin" -> "m***i*"). Includes
+	 * WordPress's own login field names —
 	 * log (wp-login) and user_login (profile/registration) — beside the generic
 	 * ones. Anchored, so identifier fields like userId / userAgent stay intact.
 	 */
 	protected const USERNAME_PATTERN = '/^(user([_-]?(name|login))?|log(in)?)$/i';
+	
+	/**
+	 * maskName() keeps every MASK_GROUP-th character of a value and stars the
+	 * rest, so the mask is exactly as long as what it replaced and a field
+	 * finally says how much was there. MASK_MAX caps the stars, and past the
+	 * cap the mask states the real length instead ("[200]") — a login field
+	 * holding thousands of characters is someone trying something. Mirrors
+	 * Logger::MASK_GROUP in ovos/php-library, the console's server-side
+	 * Scrubber and the two JS clients — the answers must agree, or the same
+	 * event means different things depending on which client sent it.
+	 */
+	protected const MASK_GROUP = 4;
+	
+	protected const MASK_MAX = 24;
+	
+	/**
+	 * A cut maskName() result: whole revealed-character groups, then the
+	 * bracketed length. Alone among the masks this form is not idempotent
+	 * by construction — re-masking would measure the mask and report 29 for a
+	 * value of 200 — so maskName() returns it untouched; the console scrubs
+	 * the report again server-side.
+	 */
+	protected const MASKED_CUT_PATTERN = '~^(?:.\*{3})+\[\d+\]$~u';
 	
 	/**
 	 * Names that are credentials ONLY as query parameters, kept apart from
@@ -189,9 +215,11 @@ final class Redactor
 						return $match[0];
 					}
 					
-					// keep the mask readable — @ and * are legal in a query
+					// keep the mask readable — @ and * are legal in a query, and
+					// the [] of a stated length are what every reader expects
 					return $match[1] . $match[2] . '='
-						. strtr(rawurlencode($masked), ['%40' => '@', '%2A' => '*']);
+						. strtr(rawurlencode($masked),
+							['%40' => '@', '%2A' => '*', '%5B' => '[', '%5D' => ']']);
 				},
 				substr($url, $position + 1),
 			);
@@ -254,10 +282,6 @@ final class Redactor
 		return $args;
 	}
 	
-	/**
-	 * Keeps the first character and masks the rest (marcin -> m***); an empty
-	 * string stays empty. The fixed suffix does not leak the original length.
-	 */
 	/**
 	 * Token-shaped PATH segments -> [redacted], leaving readable slugs alone.
 	 */
@@ -338,20 +362,36 @@ final class Redactor
 	}
 	
 	/**
-	 * First character + *** — the identity mask for usernames (same format
-	 * the php-library sender uses), enough to tell accounts apart in a
-	 * grouped issue while dropping the identifying part
+	 * Every MASK_GROUP-th character kept, the rest starred (bob -> b**,
+	 * marcin -> m***i*) — the identity mask for usernames (same format the
+	 * php-library sender uses), enough to tell accounts apart in a grouped
+	 * issue while dropping the identifying part. The mask is as long as the
+	 * value it replaced, so a line says how much was there — and past MASK_MAX
+	 * the stars stop and the real length is stated instead ("[200]"), because
+	 * a 4000-character login is an attempt, not a name. Masking a mask is a
+	 * no-op, which is what lets the console scrub the report again.
 	 */
 	public static function maskName(
 		string $value,
 	): string
 	{
-		if($value === '')
+		if($value === ''
+			|| preg_match(self::MASKED_CUT_PATTERN, $value) === 1)
 		{
 			return $value;
 		}
 		
-		return mb_substr($value, 0, 1) . '***';
+		$length = mb_strlen($value);
+		$cut = min($length, self::MASK_MAX);
+		$masked = '';
+		for($index = 0; $index < $cut; $index++)
+		{
+			$masked.= $index % self::MASK_GROUP === 0
+				? mb_substr($value, $index, 1)
+				: '*';
+		}
+		
+		return $length > $cut ? $masked . '[' . $length . ']' : $masked;
 	}
 	
 	/**
