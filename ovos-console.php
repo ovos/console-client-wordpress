@@ -3,7 +3,7 @@ declare(strict_types=1);
 /**
  * Plugin Name: ovos console
  * Description: Connects this site to an ovos/console error-monitoring instance — PHP and browser JavaScript errors, with grouping, alerting and issue lifecycle handled by the console.
- * Version: 0.4.8
+ * Version: 0.4.9
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: ovos media gmbh

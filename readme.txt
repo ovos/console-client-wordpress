@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.4.8
+Stable tag: 0.4.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,11 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.4.9 =
+* New: optional software inventory. When enabled (Settings → ovos console → "Software inventory", off by default, lockable via `OVOS_CONSOLE_INVENTORY`), the plugin reports the installed plugin/theme list with versions — plus WordPress core and PHP versions — once a day and after installs, updates, (de)activations, deletions, theme switches and core updates, so the console can match it against the Wordfence Intelligence vulnerability feed and show CVE findings on its SECURITY view, including whether the vulnerable path is already being probed. Exactly what each entry carries: type, directory slug, version, display name, active flag — never paths, options or user data. Double opt-in: this setting *and* the project's CVE switch in the console; either off keeps it inert, and the report is a single fire-and-forget request at shutdown, never a slowdown.
+* New: the bundled browser client ships automation evidence with its reports, zero-config — a `webdriver` admission (headless browsers, AI agents) and the external scripts the visitor never even attempted to load, the signature of bots running inline JS without loading script files. The console indexes both as `flags`, so bot-caused issues facet and filter apart from real-user ones. Evidence only, never suppression.
+* Change: the username mask says how much it hides. Masked usernames keep every fourth character instead of collapsing to a fixed `m***` (marcin → m***i*), so the mask is as long as the value it replaced — and past 24 characters it states the real length in brackets, because a login field holding thousands of characters is someone trying something. Applied identically in the PHP reporter and the bundled browser client.
 
 = 0.4.8 =
 * New: optional security events. When enabled (Settings → ovos console → "Security events", off by default, lockable via `OVOS_CONSOLE_SECURITY_EVENTS`), the plugin reports what WordPress refused, beside what broke: failed logins from any door (wp-login form, XML-RPC, application passwords), rejected nonce checks, REST calls answered 401/403, and sensitive admin changes (role grants, plugin installs and activations, changes to the signup/site-URL/admin-e-mail options). Usernames are masked to their first character and e-mail addresses in messages are masked with the domain kept. The console accepts these as informational `security` events independent of the project's severity threshold — grouped apart from errors, no alerts by default, feeding its attack detection. Rate-limited to 60 reports per minute, so a credential-stuffing run cannot turn the reporter into the flood it surfaces.
