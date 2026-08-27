@@ -100,6 +100,7 @@ class Settings
 			'report_404' => $this->truthy($input['report_404'] ?? ''),
 			'rollups' => $this->truthy($input['rollups'] ?? ''),
 			'security_events' => $this->truthy($input['security_events'] ?? ''),
+			'inventory' => $this->truthy($input['inventory'] ?? ''),
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
 			'js_enabled' => $this->truthy($input['js_enabled'] ?? ''),
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
@@ -177,6 +178,9 @@ class Settings
 		$this->checkboxField('security_events',
 			__('Security events', 'ovos-console'),
 			__('Report refused actions as security events, apart from errors: failed logins (any door — form, XML-RPC, application passwords, with the username masked), rejected nonce checks, forbidden REST calls, and sensitive admin changes (role grants, plugin installs and activations, signup/site-URL/admin-e-mail option changes). Informational by default in the console — they feed its attack detection without raising alerts. Rate-limited to 60 per minute.', 'ovos-console'));
+		$this->checkboxField('inventory',
+			__('Software inventory', 'ovos-console'),
+			__('Report the installed plugin/theme list with versions (plus WordPress core and PHP versions) once a day and after installs, updates or (de)activations, so the console can match it against a public vulnerability feed (CVE findings on its SECURITY view). Exactly what is sent per entry: type, directory slug, version, display name, active flag — never paths, options or user data. Inert until the project\'s CVE switch is also enabled in the console.', 'ovos-console'));
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
 			__('Optional deploy label (git sha, version), max 64 characters.', 'ovos-console'));

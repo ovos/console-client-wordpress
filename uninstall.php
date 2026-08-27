@@ -9,6 +9,8 @@ if(is_multisite())
 	{
 		switch_to_blog((int)$ovosConsoleSiteId);
 		delete_option('ovos_console');
+		delete_option('ovos_console_inventory');
+		delete_option('ovos_console_inventory_dirty');
 		restore_current_blog();
 	}
 	
@@ -16,3 +18,5 @@ if(is_multisite())
 }
 
 delete_option('ovos_console');
+delete_option('ovos_console_inventory');
+delete_option('ovos_console_inventory_dirty');

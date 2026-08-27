@@ -30,6 +30,7 @@ class Config
 		'report_404' => false,
 		'rollups' => false,
 		'security_events' => false,
+		'inventory' => false,
 		'release' => '',
 		'js_enabled' => true,
 		'js_key' => '',
@@ -105,6 +106,11 @@ class Config
 	public function rollups(): bool
 	{
 		return (bool)$this->get('rollups');
+	}
+	
+	public function inventory(): bool
+	{
+		return (bool)$this->get('inventory');
 	}
 	
 	public function securityEvents(): bool

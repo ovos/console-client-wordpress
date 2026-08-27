@@ -7,6 +7,7 @@ Reports errors from a WordPress site to a self-hosted [ovos console](https://ovo
 - **Context** — request variables (redacted before sending), logged-in user id, WordPress version, active theme, and source attribution: each error is tagged with the plugin or theme its file lives in.
 - **Traffic rollups (opt-in)** — anonymous per-minute request counters, so the console can read error and scanner-probe counts as *rates* against real traffic instead of raw numbers. Never URLs, IPs or visitor data — see [Traffic rollups](#traffic-rollups) below. Requires the APCu PHP extension.
 - **Security events (opt-in)** — what WordPress *refused*, beside what broke: failed logins, rejected nonce checks, forbidden REST calls, and sensitive admin changes. Usernames masked, rate-limited — see [Security events](#security-events) below.
+- **Software inventory (opt-in)** — the installed plugin/theme list with versions, reported once a day and after installs, updates or (de)activations, so the console can match it against a public vulnerability feed and show CVE findings — including "vulnerable AND being probed" — on its SECURITY view. Per entry: type, slug, version, display name, active flag; never paths, options or user data. See [Software inventory](#software-inventory) below.
 
 ## The console
 
@@ -122,6 +123,7 @@ Every value lives under **Settings → ovos console** and can alternatively be s
 | Report 404s | `OVOS_CONSOLE_REPORT_404` | `false` | front-end not-found requests as access events — rate-limited, static assets ignored, never turned into issues |
 | Traffic rollups | `OVOS_CONSOLE_ROLLUPS` | `false` | anonymous per-minute request counters (status / method / resolved page type / logged-in splits, no URLs or visitor data) so the console reads probe counts as rates — requires the APCu extension (silently inert without it) and the project's rollups switch |
 | Security events | `OVOS_CONSOLE_SECURITY_EVENTS` | `false` | refused actions as informational `security` events — failed logins (username masked), rejected nonce checks, REST 401/403s, sensitive admin changes; rate-limited to 60/min |
+| Software inventory | `OVOS_CONSOLE_INVENTORY` | `false` | installed plugin/theme/core versions for the console's CVE matching — daily and on change, inert until the project's CVE switch is also on in the console |
 | Release label | `OVOS_CONSOLE_RELEASE` | — | optional deploy label (git sha, version), max 64 chars |
 | Report JS errors | `OVOS_CONSOLE_JS_ENABLED` | `true` | loads the bundled browser client on the front end |
 | JS key | `OVOS_CONSOLE_JS_KEY` | — | the project's public js_key (browser errors) |
@@ -183,6 +185,35 @@ Requirements and caveats:
 - Overhead is one APCu increment set per request (sub-microsecond, no I/O)
   plus a single sub-second POST per minute of traffic, sent after the
   response went out.
+
+### Software inventory
+
+Off by default, because an installed-software list is a **disclosure**: it
+names exactly which plugins (and versions) a site runs, which is precisely
+what an attacker probes for. It therefore ships only when BOTH ends opt in —
+this setting (or `OVOS_CONSOLE_INVENTORY`) and the project's CVE switch in
+the console; the console answers `403` and stores nothing until its side is
+on too.
+
+What one report contains, exactly: `platform` (`wordpress`), the core and
+PHP versions, and up to 300 items of `{type: plugin|theme|mu-plugin, slug,
+version, name, active}`. No file paths, no option values, no user data —
+the report says *what* is installed, never where or how it is configured.
+
+When it ships: once a day (the heartbeat the console reads as "the sensor
+is alive"), and after anything that changes the list — installs, updates,
+(de)activations, deletions, theme switches, core updates. The change hooks
+only mark a flag; the actual gather-and-send runs at shutdown, fire-and-
+forget with the same millisecond bounds as every other call this plugin
+makes, so it can never slow a visitor down. An unchanged report is
+acknowledged by the console as a duplicate and costs one timestamp update.
+
+The console's nightly `security cve-sync` matches stored inventories
+against the Wordfence Intelligence scanner feed and keeps per-project
+findings: installed version, the version that fixes it, CVSS — and a
+PROBED count when the console has already seen requests naming that
+plugin's path, which is the "you run X *and* someone is looking for it"
+signal worth acting on first.
 
 ### Security events
 

@@ -63,6 +63,14 @@ final class Plugin
 			(new Rollup($this->config))->register();
 		}
 		
+		// software inventory for the console's CVE matching (opt-in twice:
+		// here AND cve_enabled on the console project) — its shutdown
+		// handler registers last, inventory being the least urgent send
+		if($this->config->inventory())
+		{
+			(new Inventory($this->config))->register();
+		}
+		
 		(new JsClient($this->config, $this->file))->register();
 		
 		// self-update from the plugin's GitHub releases, through core's
