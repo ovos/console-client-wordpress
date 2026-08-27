@@ -213,6 +213,8 @@
 				window.addEventListener('error', onResourceError, true);
 			}
 			
+			raiseResourceBuffer();
+			
 			if (config.instrumentFetch) {
 				instrumentFetch();
 			}
@@ -517,8 +519,99 @@
 			if (document.referrer) {
 				extra.referrer = scrub(document.referrer, 300);
 			}
+			// the spec'd automation admission — Selenium, Puppeteer and
+			// Playwright (and the AI browsing agents built on them) set it by
+			// default. Only ever sent as true: absence is the common case and
+			// claims nothing. The console lifts it into the indexed `flags`
+			// field (Console\Error\Row), where the issue panel facets it.
+			if (navigator.webdriver === true) {
+				extra.webdriver = true;
+			}
 		} catch (ignored) {}
 		return extra;
+	}
+	
+	// resource-timing entries kept per page — raised from the browser default
+	// (250) at init so the unloaded-script diff below survives asset-heavy
+	// pages, and the diff's own honesty cap: at this count entries may have
+	// been dropped again, and a MISSING entry proves nothing anymore
+	var RESOURCE_BUFFER = 1000;
+	
+	function raiseResourceBuffer() {
+		try {
+			if (window.performance && performance.setResourceTimingBufferSize) {
+				performance.setResourceTimingBufferSize(RESOURCE_BUFFER);
+			}
+		} catch (ignored) {}
+	}
+	
+	/** External <script src> urls the browser never even TRIED to fetch: in
+		the DOM, but absent from resource timing. A script that failed LOUDLY
+		gets an entry and an error event (onResourceError breadcrumbs those) —
+		no entry at all is the silent-skip signature of bots that execute the
+		inline scripts of a page without loading its external files, which is
+		what a "jQuery is not defined" from a plain-Chrome UA usually is. Null
+		means "no verdict" (API missing, page still parsing, buffer overflow),
+		never an empty claim. */
+	function unloadedScripts() {
+		try {
+			if (!window.performance || !performance.getEntriesByType
+				|| !document.querySelectorAll) {
+				return null;
+			}
+			// while the HTML is still parsing, later script tags are not in
+			// the DOM yet and earlier ones are legitimately in flight — any
+			// answer now would be a guess
+			if (document.readyState === 'loading') {
+				return null;
+			}
+			var entries = performance.getEntriesByType('resource');
+			if (!entries || entries.length >= RESOURCE_BUFFER) {
+				return null;
+			}
+			var loaded = {};
+			for (var i = 0; i < entries.length; i++) {
+				loaded[entries[i].name] = true;
+			}
+			var scripts = document.querySelectorAll('script[src]');
+			var missing = [];
+			for (var s = 0; s < scripts.length && missing.length < 10; s++) {
+				// the src PROPERTY, already resolved absolute — resource
+				// entry names are absolute too, so they compare exactly
+				var src = String(scripts[s].src || '');
+				if (!/^https?:/i.test(src) || loaded[src]) {
+					continue;
+				}
+				missing.push(scrub(src, 200));
+			}
+			return missing;
+		} catch (ignored) {
+			return null;
+		}
+	}
+	
+	/** Stamp the unloaded-script diff onto every batch entry that lacks one —
+		at FLUSH time, not report time: a report may fire mid-load, while the
+		flush runs flushDelay later (or at pagehide), when a script that was
+		going to load has. One diff serves the whole batch. readyState travels
+		along so the reader can judge a page that was still loading. */
+	function stampScripts(batch) {
+		try {
+			var missing;
+			for (var i = 0; i < batch.length; i++) {
+				var extra = batch[i].extra;
+				if (!extra || extra.scriptsNotLoaded !== undefined) {
+					continue;
+				}
+				if (missing === undefined) {
+					missing = unloadedScripts();
+				}
+				if (missing && missing.length) {
+					extra.scriptsNotLoaded = missing;
+					extra.readyState = String(document.readyState || '');
+				}
+			}
+		} catch (ignored) {}
 	}
 	
 	/** flattened error.cause chain, bounded */
@@ -2077,6 +2170,9 @@
 			
 			var batch = queue;
 			queue = [];
+			
+			// both transports: the diff belongs to every report of this page
+			stampScripts(batch);
 			
 			// Entries trimmed to make the body fit go BACK on the queue. They
 			// used to be dropped on the floor, and seen[] and uniqueSent had
