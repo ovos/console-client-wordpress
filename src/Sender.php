@@ -62,6 +62,7 @@ class Sender
 	 */
 	public const SECURITY_KINDS = [
 		'auth_failure',
+		'auth_success',
 		'csrf_reject',
 		'permission_denied',
 		'rate_limited',

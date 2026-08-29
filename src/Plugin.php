@@ -12,7 +12,7 @@ use function strtok;
  */
 final class Plugin
 {
-	public const VERSION = '0.4.9';
+	public const VERSION = '0.5.0';
 	
 	/**
 	 * Fixed 60-second cap on 404 access-event reports, so a hard scan cannot

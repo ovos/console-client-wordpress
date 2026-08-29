@@ -10,7 +10,9 @@ use function in_array;
 use function is_array;
 use function is_object;
 use function is_scalar;
+use function md5;
 use function method_exists;
+use function strtolower;
 
 /**
  * Security-event hooks — reports what WordPress REFUSED, beside what broke,
@@ -24,8 +26,16 @@ use function method_exists;
  * (wp-login form, XML-RPC, REST basic auth); rejected nonce checks are the
  * CSRF signal; forbidden REST calls surface permission probing; and the
  * privileged_action family records the changes an attacker makes AFTER
- * getting in (role grants, plugin installs, signup/URL option flips) —
- * routine for an admin, an audit trail during an incident.
+ * getting in (role grants, plugin installs, signup/URL option flips, file
+ * editor saves, admin application passwords) — routine for an admin, an
+ * audit trail during an incident.
+ *
+ * The one SUCCESS this class reports is auth_success: a login that worked
+ * AFTER recent failures for the same account or from the same address —
+ * the credential-stuffing success, the only login that matters. Failures
+ * are counted in short-lived transients; a clean login reports nothing,
+ * because reporting every login would be volume and surveillance, not
+ * security.
  */
 class Security
 {
@@ -40,16 +50,24 @@ class Security
 		'siteurl',
 		'home',
 	];
-	
+
+	/**
+	 * How long a failed login stays on the books for the success-after-
+	 * failures signal — long enough to span a slow spray, short enough
+	 * that this morning's typo is forgotten by lunch
+	 */
+	protected const FAILURE_WINDOW = 900;
+
 	public function __construct(
 		protected Sender $sender,
 	)
 	{
 	}
-	
+
 	public function register(): void
 	{
 		add_action('wp_login_failed', [$this, 'reportLoginFailed'], 10, 2);
+		add_action('wp_login', [$this, 'reportLoginAfterFailures'], 10, 2);
 		add_action('application_password_failed_authentication', [$this, 'reportAppPasswordFailed']);
 		add_action('check_admin_referer', [$this, 'reportNonceFailure'], 10, 2);
 		add_action('check_ajax_referer', [$this, 'reportNonceFailure'], 10, 2);
@@ -58,6 +76,9 @@ class Security
 		add_action('activated_plugin', [$this, 'reportPluginActivated']);
 		add_action('upgrader_process_complete', [$this, 'reportUpgrade'], 10, 2);
 		add_action('updated_option', [$this, 'reportOptionChange']);
+		// priority 0: observe the save attempt before core's handler wp_dies
+		add_action('wp_ajax_edit-theme-plugin-file', [$this, 'reportFileEditorSave'], 0);
+		add_action('wp_create_application_password', [$this, 'reportApplicationPassword'], 10, 2);
 	}
 	
 	/**
@@ -71,15 +92,53 @@ class Security
 		$error = null,
 	): void
 	{
-		$message = 'login failed for ' . Redactor::maskName(
-			is_scalar($username) ? (string)$username : '');
-			
+		$username = is_scalar($username) ? (string)$username : '';
+		$message = 'login failed for ' . Redactor::maskName($username);
+
 		if($error instanceof WP_Error && $error->get_error_codes() !== [])
 		{
 			$message .= ': ' . implode(', ', $error->get_error_codes());
 		}
-		
+
+		// remember the failure for the success-after-failures signal — per
+		// account and per address, so both a targeted account and a spray
+		// from one machine are seen
+		$this->countFailure('user', $username);
+		$this->countFailure('ip', $this->clientIp());
+
 		$this->sender->reportRefusal('auth_failure', $message);
+	}
+
+	/**
+	 * wp_login — the credential-stuffing SUCCESS: the failures each fired
+	 * auth_failure, but the one presentation that WORKED is the only one
+	 * that matters, and it is silent by default. Reported ONLY when recent
+	 * failures preceded it (same account or same address, FAILURE_WINDOW);
+	 * a clean login reports nothing — that would be surveillance, not
+	 * security. The counters clear on report so one success reports once.
+	 */
+	public function reportLoginAfterFailures(
+		$login,
+		$user = null,
+	): void
+	{
+		$login = is_scalar($login) ? (string)$login : '';
+
+		$account = $this->failures('user', $login);
+		$address = $this->failures('ip', $this->clientIp());
+
+		if($account === 0 && $address === 0)
+		{
+			return;
+		}
+
+		$this->clearFailures('user', $login);
+		$this->clearFailures('ip', $this->clientIp());
+
+		$this->sender->reportRefusal('auth_success',
+			'login succeeded for ' . Redactor::maskName($login)
+			. ' after recent failures (account: ' . $account
+			. ', address: ' . $address . ')');
 	}
 	
 	/**
@@ -154,7 +213,10 @@ class Security
 	
 	/**
 	 * set_user_role — a role grant is the classic post-compromise move;
-	 * user id and role names only, never the account's identity
+	 * user id and role names only, never the account's identity. WP core
+	 * fires this for NEW users too (wp_insert_user always calls set_role),
+	 * so a born-admin account is seen here — the message says created vs
+	 * changed so the operator reads which move it was.
 	 */
 	public function reportRoleChange(
 		$userId,
@@ -162,10 +224,59 @@ class Security
 		$oldRoles = [],
 	): void
 	{
+		$oldRoles = (array)$oldRoles;
+		$role = is_scalar($role) ? (string)$role : '?';
+
+		$this->sender->reportRefusal('privileged_action', $oldRoles === []
+			? 'user created: #' . (int)$userId . ' as ' . $role
+			: 'user role changed: #' . (int)$userId
+				. ' ' . implode(',', $oldRoles) . ' -> ' . $role);
+	}
+
+	/**
+	 * wp_ajax_edit-theme-plugin-file at priority 0 — a save from the theme
+	 * or plugin FILE EDITOR, observed before core's handler runs (and
+	 * wp_dies). The webshell-by-editor move: legitimate on almost no
+	 * production site, and even a refused attempt is worth the line. The
+	 * file name is the signal; the content is deliberately not touched.
+	 */
+	public function reportFileEditorSave(): void
+	{
+		// phpcs:disable WordPress.Security.NonceVerification -- observation only, before core's own nonce check; nothing here mutates state
+		$file = isset($_POST['file'])
+			? sanitize_text_field(wp_unslash((string)$_POST['file']))
+			: '?';
+		$container = isset($_POST['theme']) ? 'theme' : 'plugin';
+		// phpcs:enable WordPress.Security.NonceVerification
+
 		$this->sender->reportRefusal('privileged_action',
-			'user role changed: #' . (int)$userId
-			. ' ' . implode(',', (array)$oldRoles)
-			. ' -> ' . (is_scalar($role) ? (string)$role : '?'));
+			'file editor save: ' . $container . ' ' . $file);
+	}
+
+	/**
+	 * wp_create_application_password — persistent API access is what an
+	 * intruder mints for durability. Reported for ADMIN accounts only:
+	 * an app password for a shop's order-sync user is routine, one for
+	 * the administrator is the incident line.
+	 */
+	public function reportApplicationPassword(
+		$userId,
+		$item = [],
+	): void
+	{
+		$userId = (int)$userId;
+
+		if(user_can($userId, 'manage_options') === false)
+		{
+			return;
+		}
+
+		$name = is_array($item) && is_scalar($item['name'] ?? null)
+			? (string)$item['name']
+			: '?';
+
+		$this->sender->reportRefusal('privileged_action',
+			'application password created for admin #' . $userId . ': ' . $name);
 	}
 	
 	public function reportPluginActivated(
@@ -216,8 +327,68 @@ class Security
 		{
 			return;
 		}
-		
+
 		$this->sender->reportRefusal('privileged_action',
 			'option changed: ' . (string)$option);
+	}
+
+	/**
+	 * One failure remembered — a transient per subject (account or address)
+	 * whose whole value is a count. Each failure refreshes the window: the
+	 * signal is "failures RECENTLY", not "failures since exactly the first"
+	 */
+	protected function countFailure(
+		string $scope,
+		string $subject,
+	): void
+	{
+		if($subject === '')
+		{
+			return;
+		}
+
+		$key = $this->failureKey($scope, $subject);
+
+		set_transient($key, (int)get_transient($key) + 1, self::FAILURE_WINDOW);
+	}
+
+	protected function failures(
+		string $scope,
+		string $subject,
+	): int
+	{
+		return $subject === ''
+			? 0
+			: (int)get_transient($this->failureKey($scope, $subject));
+	}
+
+	protected function clearFailures(
+		string $scope,
+		string $subject,
+	): void
+	{
+		if($subject !== '')
+		{
+			delete_transient($this->failureKey($scope, $subject));
+		}
+	}
+
+	/**
+	 * The transient key never carries the subject itself — a username in
+	 * an options-table key would be stored in the clear
+	 */
+	protected function failureKey(
+		string $scope,
+		string $subject,
+	): string
+	{
+		return 'ovos_console_authfail_' . $scope . '_' . md5(strtolower($subject));
+	}
+
+	protected function clientIp(): string
+	{
+		return isset($_SERVER['REMOTE_ADDR'])
+			? sanitize_text_field(wp_unslash((string)$_SERVER['REMOTE_ADDR']))
+			: '';
 	}
 }
