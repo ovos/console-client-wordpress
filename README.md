@@ -1,3 +1,7 @@
+<p align="center">
+	<img src="docs/logo.svg" alt="ovos console — WordPress plugin" width="940">
+</p>
+
 # ovos console — WordPress plugin
 
 Reports errors from a WordPress site to a self-hosted [ovos console](https://ovos.github.io/console/) error-monitoring instance:
@@ -5,13 +9,15 @@ Reports errors from a WordPress site to a self-hosted [ovos console](https://ovo
 - **PHP errors** — warnings, notices and fatals (uncaught exceptions included), batched into a single POST from the shutdown handler after the response went out. Fire-and-forget: every failure is swallowed, the HTTP call has a hard 1 s timeout — reporting can never break or noticeably slow the site.
 - **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite). Reports carry automation evidence, zero-config: a `webdriver` admission (headless browsers, AI agents) and the external scripts the visitor never even attempted to load — the signature of bots that run inline JS without loading script files. The console indexes both as `flags`, so bot-caused issues facet and filter apart from real-user ones.
 - **Context** — request variables (redacted before sending), logged-in user id, WordPress version, active theme, and source attribution: each error is tagged with the plugin or theme its file lives in.
-- **Traffic rollups (opt-in)** — anonymous per-minute request counters, so the console can read error and scanner-probe counts as *rates* against real traffic instead of raw numbers. Never URLs, IPs or visitor data — see [Traffic rollups](#traffic-rollups) below. Requires the APCu PHP extension.
+- **Traffic rollups (opt-in)** — anonymous per-minute request counters, so the console can read error and scanner-probe counts as *rates* against real traffic instead of raw numbers — and, since 0.5.1, request-duration histograms beside them, so the console's PERFORMANCE panel answers "did the update make the site slow?" with ≈p50/≈p95 trends and the slowest pages. Never URLs, IPs, visitor data or raw timings — see [Traffic rollups](#traffic-rollups) below. Requires the APCu PHP extension.
 - **Security events (opt-in)** — what WordPress *refused*, beside what broke: failed logins, rejected nonce checks, forbidden REST calls, and sensitive admin changes. Usernames masked, rate-limited — see [Security events](#security-events) below.
 - **Software inventory (opt-in)** — the installed plugin/theme list with versions, reported once a day and after installs, updates or (de)activations, so the console can match it against a public vulnerability feed and show CVE findings — including "vulnerable AND being probed" — on its SECURITY view. Per entry: type, slug, version, display name, active flag; never paths, options or user data. See [Software inventory](#software-inventory) below.
 
 ## The console
 
-[![The ovos console errors grid — live rows with project, type, priority, message and occurrence counts](https://ovos.github.io/console/assets/errors.png)](https://console-demo.ovos.at/)
+<p align="center">
+	<a href="https://console-demo.ovos.at/"><img src="https://ovos.github.io/console/assets/errors.png" alt="The ovos console errors grid — live rows with project, type, priority, message and occurrence counts" width="940"></a>
+</p>
 
 **[Try the live demo →](https://console-demo.ovos.at/)** — a public instance filled with synthetic errors. No login, no sign-up: browse the grid, expand a row for the full backtrace and request context, filter the issues, look at the monitors. Changes are disabled, triage (check, star, resolve) is not — press <kbd>?</kbd> for the keyboard map.
 
@@ -153,6 +159,13 @@ method, the *page type* WordPress resolved (front page, `singular/{post_type}`,
 and ships each completed minute as **one** small POST to the console. A
 request answered 404 counts only as "matched nothing", which is exactly the
 scanner-probe signal the console's attack detection reads as a rate.
+
+Since 0.5.1 the same fragment also carries **request-duration histograms**:
+every request's wall time (PHP start to shutdown) counted into 12 fixed
+buckets, per site and per page type. The console reads them back as
+≈p50/≈p95 trends with release markers and a slowest-pages table on its
+PERFORMANCE panel — bucket counts only, so a raw timing never leaves the
+site and the payload grows by a few hundred bytes a minute.
 
 What deliberately never travels: URLs, query strings, IP addresses, user
 agents, cookies, or anything else request-derived — the counter names come
