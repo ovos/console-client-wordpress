@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.0
+Stable tag: 0.5.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -57,8 +57,10 @@ From 0.4.5 on the plugin keeps itself current: its `Update URI` header points Wo
 
 == Changelog ==
 
-= 0.5.0 =
+= 0.5.1 =
 * New: request-duration histograms ride the traffic rollups. When rollups are on, every request also counts its wall time (PHP start to shutdown) into 12 fixed buckets — per site and per route — so the console's PERFORMANCE panel can show ≈p50/≈p95 trends with release markers and the slowest routes. Counts only, bucketed on this server: a raw timing never leaves the site, and the payload grows by a few hundred bytes a minute. Older consoles simply ignore the new key.
+
+= 0.5.0 =
 * New: the login that WORKED. Failed logins each report `auth_failure`, but in a credential-stuffing run the one presentation that succeeds is the only one that matters — and it was silent. The plugin now remembers failures for 15 minutes (per account and per source address, as counters in transients — never the username itself) and when a login succeeds on the heels of failures it reports a single `auth_success` event with both counts ("login succeeded for m***i* after recent failures (account: 3, address: 7)"). A clean login reports nothing, ever: that would be surveillance, not security. In the console, a watch rule on class `auth_success` is the "page me when a spray works" switch.
 * New: two more post-compromise moves join the `privileged_action` audit family — saves from the built-in theme/plugin FILE EDITOR (the classic webshell-by-editor move; the file name is reported, the content never), and application passwords created for administrator accounts (persistent API access is what an intruder mints for durability; app passwords for non-admin service users stay unreported).
 * Change: role-change events now distinguish a NEW account from a promotion — "user created: #12 as administrator" vs "user role changed: #12 subscriber -> administrator" — so a born-admin account reads as the louder event it is.
