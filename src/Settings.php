@@ -102,6 +102,7 @@ class Settings
 			'security_events' => $this->truthy($input['security_events'] ?? ''),
 			'inventory' => $this->truthy($input['inventory'] ?? ''),
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
+			'environment' => mb_substr(sanitize_text_field((string)($input['environment'] ?? '')), 0, 64),
 			'js_enabled' => $this->truthy($input['js_enabled'] ?? ''),
 			'js_key' => sanitize_text_field((string)($input['js_key'] ?? '')),
 			'js_trace' => $this->truthy($input['js_trace'] ?? ''),
@@ -184,6 +185,9 @@ class Settings
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
 			__('Optional deploy label (git sha, version), max 64 characters.', 'ovos-console'));
+		$this->inputField('environment',
+			__('Environment', 'ovos-console'), 'text', '',
+			__('Deployment stage sent with every report. Left blank, WordPress\' own environment type (WP_ENVIRONMENT_TYPE) is sent — the console shows non-production values as a badge beside the project name.', 'ovos-console'));
 		
 		echo '</table>';
 		

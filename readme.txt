@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.1
+Stable tag: 0.5.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.2 =
+* New: every report carries the site's deployment environment (`wp_get_environment_type()` — production, staging, development or local), so one console project can tell its stages apart: the console shows non-production values as a badge beside the project name and lets you filter and sort by them. An explicit value can be set on the settings page or via the `OVOS_CONSOLE_ENVIRONMENT` constant. Older consoles simply ignore the new field.
 
 = 0.5.1 =
 * New: request-duration histograms ride the traffic rollups. When rollups are on, every request also counts its wall time (PHP start to shutdown) into 12 fixed buckets — per site and per route — so the console's PERFORMANCE panel can show ≈p50/≈p95 trends with release markers and the slowest routes. Counts only, bucketed on this server: a raw timing never leaves the site, and the payload grows by a few hundred bytes a minute. Older consoles simply ignore the new key.

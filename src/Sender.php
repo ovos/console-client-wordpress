@@ -437,6 +437,13 @@ class Sender
 			$payload['release'] = $release;
 		}
 		
+		$environment = $this->config->environment();
+		
+		if($environment !== '')
+		{
+			$payload['environment'] = $environment;
+		}
+		
 		return $payload;
 	}
 	

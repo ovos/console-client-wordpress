@@ -32,6 +32,7 @@ class Config
 		'security_events' => false,
 		'inventory' => false,
 		'release' => '',
+		'environment' => '',
 		'js_enabled' => true,
 		'js_key' => '',
 		'js_trace' => true,
@@ -121,6 +122,19 @@ class Config
 	public function release(): string
 	{
 		return mb_substr(trim((string)$this->get('release')), 0, 64);
+	}
+	
+	/**
+	 * Deployment stage sent with every report. An explicit setting (or the
+	 * OVOS_CONSOLE_ENVIRONMENT constant) wins; unset, WP's own
+	 * wp_get_environment_type() goes out — production included (the console
+	 * stores and filters it, but only badges anything else).
+	 */
+	public function environment(): string
+	{
+		$environment = mb_substr(trim((string)$this->get('environment')), 0, 64);
+		
+		return $environment !== '' ? $environment : (string)wp_get_environment_type();
 	}
 	
 	public function jsEnabled(): bool
