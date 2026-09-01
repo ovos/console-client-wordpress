@@ -23,6 +23,7 @@ use function defined;
 use function function_exists;
 use function getmypid;
 use function gethostname;
+use function headers_list;
 use function http_response_code;
 use function in_array;
 use function intdiv;
@@ -178,6 +179,14 @@ class Rollup
 			$started = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : 0.0;
 			$duration = $started > 0.0 ? (microtime(true) - $started) * 1000 : null;
 			
+			// a streaming response (server-sent events) is held open for as long
+			// as the client listens: its wall time measures the subscription, not
+			// the work. It still counts as a request - it just has no duration
+			if(self::isStream(headers_list()))
+			{
+				$duration = null;
+			}
+			
 			$this->count(
 				$minute,
 				$status,
@@ -193,6 +202,29 @@ class Rollup
 		{
 			// telemetry must never break the host site
 		}
+	}
+	
+	/**
+	 * Whether the response being finished is a stream: a Content-Type of
+	 * text/event-stream, whatever its case or charset suffix. A stream is held
+	 * open for as long as the client listens, so its wall time measures the
+	 * subscription, not the work - observe() counts it as a request and gives
+	 * it no duration. Takes the header list (headers_list() at shutdown, empty
+	 * on the CLI) so the rule is testable where no headers exist.
+	 */
+	public static function isStream(
+		array $headers,
+	): bool
+	{
+		foreach($headers as $header)
+		{
+			if(preg_match('~^content-type:\s*text/event-stream\b~i', (string)$header) === 1)
+			{
+				return true;
+			}
+		}
+		
+		return false;
 	}
 	
 	/**

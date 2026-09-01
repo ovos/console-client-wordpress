@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.2
+Stable tag: 0.5.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.3 =
+* Change: streaming responses (`Content-Type: text/event-stream`, server-sent events) still count as traffic in the rollups but no longer contribute a request duration. A stream stays open for as long as the browser listens, so its wall time measured the subscription, not the work — one SSE endpoint could own the site's average response time in the console.
 
 = 0.5.2 =
 * New: the bundled browser client sends the deployment environment too (same source; an explicit setting wins), and gained the `environment` init option for standalone use.
