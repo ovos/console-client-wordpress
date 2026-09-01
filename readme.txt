@@ -58,6 +58,8 @@ From 0.4.5 on the plugin keeps itself current: its `Update URI` header points Wo
 == Changelog ==
 
 = 0.5.2 =
+* New: the bundled browser client sends the deployment environment too (same source; an explicit setting wins), and gained the `environment` init option for standalone use.
+* Change: e-mail masks now state how long the address was. `d***@hotmail.com` said nothing about whether it hid "dave" or a 40-character address; the local part is now masked like usernames — every fourth character revealed, the rest starred — so `john.doe@example.com` becomes `j***.***@example.com`. The domain stays, as before.
 * New: every report carries the site's deployment environment (`wp_get_environment_type()` — production, staging, development or local), so one console project can tell its stages apart: the console shows non-production values as a badge beside the project name and lets you filter and sort by them. An explicit value can be set on the settings page or via the `OVOS_CONSOLE_ENVIRONMENT` constant. Older consoles simply ignore the new field.
 
 = 0.5.1 =

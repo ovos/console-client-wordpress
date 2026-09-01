@@ -100,12 +100,24 @@ final class Redactor
 	protected const PATH_CANDIDATE = '~(/)([A-Za-z0-9_.-]{20,})(?=[/?#]|$)~';
 	
 	/**
-	 * An e-mail address inside a string value. The first local-part character
-	 * is kept and the domain is left intact (j***@example.com) — enough to tell
-	 * providers/customers apart while dropping the identifying part.
+	 * An e-mail address inside a string value. The local part is masked to
+	 * every MASK_GROUP-th character (maskName), the domain is left intact
+	 * (john.doe@example.com -> j***.***@example.com) — the mask says how
+	 * long the address was and the domain still tells providers/customers
+	 * apart, while the identifying part is gone.
 	 */
 	protected const EMAIL_PATTERN =
-		'/([a-z0-9._%+\-])[a-z0-9._%+\-]*@([a-z0-9.\-]+\.[a-z]{2,})/i';
+		'/([a-z0-9._%+\-]+)@([a-z0-9.\-]+\.[a-z]{2,})/i';
+	
+	/**
+	 * An address this class ALREADY masked. A mask's local part always holds
+	 * a star (or a bracketed cut length) somewhere before the @ — a real
+	 * local part never does — so this spots every mask shape: the legacy
+	 * fixed form (j***@…), the length-aware form (j***.***@…, m***i@…) and
+	 * the cut form (x***x***[47]@…).
+	 */
+	protected const MASKED_EMAIL_PATTERN =
+		'/[*\]][a-z0-9._%+\-]*@[a-z0-9.\-]+\.[a-z]{2,}/i';
 	
 	protected const MAX_DEPTH = 8;
 	
@@ -147,10 +159,16 @@ final class Redactor
 			}
 			
 			// an e-mail in ANY field (a login that is an e-mail, a "to"
-			// address, ...) — masked with the domain kept
-			$masked = (string)preg_replace(self::EMAIL_PATTERN, '${1}***@${2}', $value);
+			// address, ...) — masked to its length with the domain kept. A
+			// one-character local part masks to ITSELF and an already-masked
+			// address no longer looks like one: both still belong to this
+			// rule, or the username mask below would chew them and drop the
+			// domain kept on purpose.
+			$masked = self::maskEmails($value);
 			
-			if($masked !== $value)
+			if($masked !== $value
+				|| preg_match(self::EMAIL_PATTERN, $value) === 1
+				|| preg_match(self::MASKED_EMAIL_PATTERN, $value) === 1)
 			{
 				$clean[$key] = $masked;
 				
@@ -203,8 +221,13 @@ final class Redactor
 					}
 					
 					$value = rawurldecode($match[3]);
-					$masked = (string)preg_replace(self::EMAIL_PATTERN, '${1}***@${2}', $value);
+					$masked = self::maskEmails($value);
 					if($masked === $value
+						// not an address in any form — raw (a one-character
+						// local part masks to itself) or already masked — or
+						// the username mask would drop the domain
+						&& preg_match(self::EMAIL_PATTERN, $value) !== 1
+						&& preg_match(self::MASKED_EMAIL_PATTERN, $value) !== 1
 						&& preg_match(self::USERNAME_PATTERN, rawurldecode($match[2])) === 1)
 					{
 						$masked = self::maskName($value);
@@ -395,13 +418,23 @@ final class Redactor
 	}
 	
 	/**
-	 * Masks e-mail addresses inside a plain string (j***@example.com),
-	 * the domain kept — for message text that may quote an address
+	 * Masks e-mail addresses inside a plain string: the local part becomes a
+	 * maskName() mask — as long as the address was, every MASK_GROUP-th
+	 * character revealed — and the domain is kept
+	 * (john.doe@example.com -> j***.***@example.com). Idempotent: a masked
+	 * local part never ends in a run of address characters, so the pattern
+	 * can at most re-find a single revealed character before the @, which
+	 * maskName maps onto itself.
 	 */
 	public static function maskEmails(
 		string $value,
 	): string
 	{
-		return (string)preg_replace(self::EMAIL_PATTERN, '${1}***@${2}', $value);
+		return (string)preg_replace_callback(
+			self::EMAIL_PATTERN,
+			static fn(array $match): string
+				=> self::maskName($match[1]) . '@' . $match[2],
+			$value,
+		);
 	}
 }

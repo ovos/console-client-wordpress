@@ -67,6 +67,13 @@ class JsClient
 			$options['release'] = $this->config->release();
 		}
 		
+		// wp_get_environment_type() answers even unconfigured ('production'),
+		// so this is always set — the console badges only non-production
+		if($this->config->environment() !== '')
+		{
+			$options['environment'] = $this->config->environment();
+		}
+		
 		// the client defaults to trace: true — only the opt-out is emitted
 		if($this->config->jsTrace() === false)
 		{

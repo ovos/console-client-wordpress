@@ -127,10 +127,16 @@
 	var SCRUB_PATH = /(\/)([A-Za-z0-9_.-]{20,})(?=[/?#]|$)/g;
 	// an e-mail address (plain or %40-encoded) anywhere -> first char + domain
 	// kept (j***@example.com)
-	var EMAIL_VALUE = /([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@|%40)([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+	var EMAIL_VALUE = /([A-Za-z0-9._%+-]+)(@|%40)([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+	// the same shape without the g flag (a global .test() is stateful) — a
+	// one-character local part masks to ITSELF, so "changed" cannot see it
+	var EMAIL_PLAIN = /[A-Za-z0-9._%+-]+(?:@|%40)[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+	// an address already masked: its local part holds a star (or the
+	// bracketed cut length) where a real local part never does
+	var MASKED_EMAIL = /[*\]][A-Za-z0-9._%+-]*(?:@|%40)[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 	// anchored username-ish query params -> maskName() (the lookahead skips
 	// values the e-mail mask already handled)
-	var SCRUB_USER_PARAMS = /([?&#](?:user(?:[_-]?(?:name|login))?|login)=)(?![^&#]*\*{3})([^&#]+)/gi;
+	var SCRUB_USER_PARAMS = /([?&#](?:user(?:[_-]?(?:name|login))?|login)=)(?![^&#]*(?:\*{3}|@|%40))([^&#]+)/gi;
 	// secret-named keys of the extra bag -> [redacted]
 	var SCRUB_KEYS = /pass(word|wd)?|pwd|token|secret|authorization|cookie|api[-_]?key/i;
 	// anchored username keys of the extra bag -> maskName()
@@ -159,6 +165,8 @@
 		maxBytes: 60000,    // sendBeacon payload cap
 		ignore: [/^Script error\.?$/, /^ResizeObserver loop/],
 		release: '',        // deploy label (git sha, version) — indexed server-side
+		environment: '',    // deployment stage (staging, development) — indexed server-side;
+		                    // the console badges non-production values beside the project name
 		context: null,
 		breadcrumbs: true,
 		maxBreadcrumbs: 20,
@@ -449,6 +457,9 @@
 		
 		if (config.release) {
 			entry.release = truncate(config.release, 64);
+		}
+		if (config.environment) {
+			entry.environment = truncate(config.environment, 64);
 		}
 		// a failed request's trace id — indexed server-side, links the report
 		// to the backend errors of the same request
@@ -1675,7 +1686,7 @@
 			value = value.replace(SCRUB_PARAMS, '$1[redacted]');
 			// e-mail values in any remaining param or path segment (domain
 			// kept), then username-named params down to their masked groups
-			value = value.replace(EMAIL_VALUE, '$1***$2$3');
+			value = maskEmails(value);
 			value = value.replace(SCRUB_USER_PARAMS, function (match, prefix, name) {
 				return prefix + maskName(name);
 			});
@@ -1710,7 +1721,7 @@
 	function scrubBag(bag, depth) {
 		try {
 			if (typeof bag === 'string') {
-				return bag.replace(EMAIL_VALUE, '$1***$2$3');
+				return maskEmails(bag);
 			}
 			if (bag === null || typeof bag !== 'object') {
 				return bag;
@@ -1734,8 +1745,14 @@
 				} else if (value !== null && typeof value === 'object') {
 					out[key] = scrubBag(value, depth + 1);
 				} else if (typeof value === 'string') {
-					var masked = value.replace(EMAIL_VALUE, '$1***$2$3');
-					out[key] = masked === value && USER_KEYS.test(key) ? maskName(value) : masked;
+					var masked = maskEmails(value);
+					// a one-character local part masks to itself and an already-
+					// masked address no longer looks like one — both still count
+					// as "the e-mail rule handled this", or the username rule
+					// below would chew the mask and drop the domain
+					out[key] = masked === value && !EMAIL_PLAIN.test(value)
+						&& !MASKED_EMAIL.test(value) && USER_KEYS.test(key)
+						? maskName(value) : masked;
 				} else {
 					out[key] = value;
 				}
@@ -1745,6 +1762,17 @@
 			// best-effort: an unreadable bag is dropped, never sent raw
 			return null;
 		}
+	}
+	
+	/** every e-mail in the value -> maskName(local part) + the domain kept:
+		the mask says how long the address was (john.doe@x.com -> j***.***@x.com).
+		Idempotent — a masked local part never ends in a run of address
+		characters, so at most a single revealed character re-matches, and
+		maskName maps a single character onto itself */
+	function maskEmails(value) {
+		return value.replace(EMAIL_VALUE, function (match, local, at, domain) {
+			return maskName(local) + at + domain;
+		});
 	}
 	
 	/** every MASK_GROUP-th character kept, the rest starred (bob -> b**,
@@ -2042,6 +2070,10 @@
 		];
 		if (config.release) {
 			resource.push(attr('service.version', truncate(config.release, 64)));
+		}
+		if (config.environment) {
+			resource.push(attr('deployment.environment.name',
+				truncate(config.environment, 64)));
 		}
 		
 		return {resourceLogs: [{
