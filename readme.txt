@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.5
+Stable tag: 0.5.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.6 =
+* New: the browser client marks a report that followed a failed load of one of the site's own scripts (`scriptsFailed`, beside the existing `scriptsNotLoaded` for scripts a bot never fetched). The console (2026-09 release) flags such rows `scripts_failed` and ships an installation rule that drops both dependency-failure shapes at the door — the "jQuery is not defined" and "Site is not defined" noise from bots running a page's inline code without its bundles — counting them on the rule instead of filling the grid. Older consoles ignore the key.
 
 = 0.5.5 =
 * New: every report names the plugin that sent it (`client`: `wordpress/0.5.5`). The console (2026-09 release) shows the last reporting version per project in its PROJECTS grid and the report's own in the error detail, so a site running an outdated or misbehaving plugin can be told apart at a glance. Older consoles ignore the field.

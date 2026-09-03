@@ -101,6 +101,11 @@
 	var flushTimer = null;
 	var pageId = '';      // random per page load — correlates sibling reports
 	var breadcrumbs = []; // ring buffer, oldest first
+	// first-party scripts that FAILED to load (a resource error fired) — the
+	// second dependency-failure shape beside the never-fetched diff: a bot
+	// that timed out on the bundle, a user's network that dropped it. Stamped
+	// as extra.scriptsFailed at flush (docs/plans/dependency-failures.md)
+	var failedScripts = [];
 	var loadStart = Date.now();
 	var navInstrumented = false;   // history/popstate wrapping is one-time
 	var clicksInstrumented = false;
@@ -356,6 +361,12 @@
 			
 			// often the root cause of the TypeErrors that follow
 			crumb('resource', {tag: tag, url: scrub(url, 200)});
+			
+			// one of OUR scripts failed: whatever the inline code throws next is
+			// a dependency failure, not a bug — the console flags it scripts_failed
+			if (tag === 'script' && failedScripts.length < 10 && isFirstParty(url, '', 0)) {
+				failedScripts.push(scrub(url, 200));
+			}
 			
 			// a broken same-origin script is a deploy problem — loud, if enabled
 			if (config.reportResourceErrors && tag === 'script'
@@ -620,6 +631,9 @@
 				if (missing && missing.length) {
 					extra.scriptsNotLoaded = missing;
 					extra.readyState = String(document.readyState || '');
+				}
+				if (failedScripts.length && extra.scriptsFailed === undefined) {
+					extra.scriptsFailed = failedScripts.slice();
 				}
 			}
 		} catch (ignored) {}
