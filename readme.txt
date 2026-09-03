@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.4
+Stable tag: 0.5.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.5 =
+* New: every report names the plugin that sent it (`client`: `wordpress/0.5.5`). The console (2026-09 release) shows the last reporting version per project in its PROJECTS grid and the report's own in the error detail, so a site running an outdated or misbehaving plugin can be told apart at a glance. Older consoles ignore the field.
 
 = 0.5.4 =
 * New: every report names the three axes the console groups and filters by since its 2026-09 release — `runtime` (php), `entry` (web, or cli under WP-CLI / cron) and `kind` (error, not_found for the 404 reports, security for the refusals and audit lines). The console shows a PHP·CLI badge for command-line errors and files a web request and a cron hitting the same bug as ONE issue. The old `type` field is still sent, so a console that has not updated yet keeps working; it will be dropped in a later release.

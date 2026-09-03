@@ -436,6 +436,10 @@ class Sender
 		$payload['entry'] = $context['entry'];
 		$payload['kind'] ??= 'error';
 		$payload['type'] ??= $context['type'];
+		// the sender naming itself: the console shows the last one per
+		// project and the row's in META, so a misbehaving plugin version can
+		// be told apart from a healthy one without opening the site
+		$payload['client'] = 'wordpress/' . Plugin::VERSION;
 		$payload['context'] = $context['context']
 			+ ['extra' => Redactor::scrub($payload['extra']) + $this->buildWpExtra($payload)];
 		unset($payload['extra']);
