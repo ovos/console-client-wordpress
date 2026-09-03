@@ -187,6 +187,9 @@ class Sender
 			}
 			
 			$payload = Payload::fromMessage('404 Not Found: ' . mb_substr($path, 0, 512), 6, $extra);
+			// the KIND (console ≥ 2026-09: runtime · entry · kind); `type` is the
+			// legacy slot older consoles read — kept for the transition
+			$payload['kind'] = 'not_found';
 			$payload['type'] = '404';
 			
 			$this->queue[] = $payload;
@@ -198,7 +201,7 @@ class Sender
 	}
 	
 	/**
-	 * Reports a refused action as a type=security event (priority 6, INFO) —
+	 * Reports a refused action as a kind=security event (priority 6, INFO) —
 	 * what was REFUSED, beside what broke: failed logins, rejected nonce
 	 * checks, forbidden REST calls, sensitive admin changes. $kind must come
 	 * from SECURITY_KINDS (the console refuses unknown kinds; anything else
@@ -227,8 +230,9 @@ class Sender
 			$message = $message !== ''
 				? Redactor::maskEmails(mb_substr($message, 0, 512))
 				: $kind;
-				
+			
 			$payload = Payload::fromMessage($message, 6, $extra);
+			$payload['kind'] = 'security';
 			$payload['type'] = 'security';
 			$payload['events'] = [
 				[
@@ -346,10 +350,9 @@ class Sender
 			{
 				// 404 access events and security events ride the INFO band but
 				// are KINDS, not severities — the log_level gate (a severity
-				// filter) must not drop them
-				$type = (string)($payload['type'] ?? '');
-				if($type !== '404' && $type !== 'security'
-					&& $payload['priority'] > $logLevel)
+				// filter) must not drop them; only errors are judged by it
+				$kind = (string)($payload['kind'] ?? 'error');
+				if($kind === 'error' && $payload['priority'] > $logLevel)
 				{
 					continue;
 				}
@@ -424,7 +427,14 @@ class Sender
 		array $context,
 	): array
 	{
-		// respect a type the payload already carries (404); else the request type
+		// the three axes every console ≥ 2026-09 reads: what ran the code, how
+		// it was entered, what the event is. A kind the payload already carries
+		// (not_found, security) stands; everything else is an error. `type` is
+		// the legacy slot older consoles still read — kept until every console
+		// this plugin may talk to has updated
+		$payload['runtime'] = 'php';
+		$payload['entry'] = $context['entry'];
+		$payload['kind'] ??= 'error';
 		$payload['type'] ??= $context['type'];
 		$payload['context'] = $context['context']
 			+ ['extra' => Redactor::scrub($payload['extra']) + $this->buildWpExtra($payload)];
@@ -502,6 +512,7 @@ class Sender
 		
 		return [
 			'type' => $isCli ? 'cli' : 'http',
+			'entry' => $isCli ? 'cli' : 'web',
 			'context' => $context,
 		];
 	}

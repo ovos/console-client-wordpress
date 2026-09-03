@@ -10,6 +10,7 @@ use function in_array;
 use function is_array;
 use function is_object;
 use function is_scalar;
+use function max;
 use function md5;
 use function method_exists;
 use function strtolower;
@@ -135,10 +136,14 @@ class Security
 		$this->clearFailures('user', $login);
 		$this->clearFailures('ip', $this->clientIp());
 
+		// extra.failures is the EVIDENCE the console's rules ask about
+		// ("failures >= 3"): the larger of the two counts, since either a
+		// sprayed account or a hammering address is the stuffing signal
 		$this->sender->reportRefusal('auth_success',
 			'login succeeded for ' . Redactor::maskName($login)
 			. ' after recent failures (account: ' . $account
-			. ', address: ' . $address . ')');
+			. ', address: ' . $address . ')',
+			['failures' => max($account, $address)]);
 	}
 	
 	/**
@@ -227,10 +232,16 @@ class Security
 		$oldRoles = (array)$oldRoles;
 		$role = is_scalar($role) ? (string)$role : '?';
 
+		// extra.action names the sub-kind for the console's rules ("action = X")
+		$action = $oldRoles === []
+			? ($role === 'administrator' ? 'admin_created' : 'user_created')
+			: 'role_change';
+
 		$this->sender->reportRefusal('privileged_action', $oldRoles === []
 			? 'user created: #' . (int)$userId . ' as ' . $role
 			: 'user role changed: #' . (int)$userId
-				. ' ' . implode(',', $oldRoles) . ' -> ' . $role);
+				. ' ' . implode(',', $oldRoles) . ' -> ' . $role,
+			['action' => $action]);
 	}
 
 	/**
@@ -250,7 +261,8 @@ class Security
 		// phpcs:enable WordPress.Security.NonceVerification
 
 		$this->sender->reportRefusal('privileged_action',
-			'file editor save: ' . $container . ' ' . $file);
+			'file editor save: ' . $container . ' ' . $file,
+			['action' => 'file_edit']);
 	}
 
 	/**
@@ -276,7 +288,8 @@ class Security
 			: '?';
 
 		$this->sender->reportRefusal('privileged_action',
-			'application password created for admin #' . $userId . ': ' . $name);
+			'application password created for admin #' . $userId . ': ' . $name,
+			['action' => 'app_password']);
 	}
 	
 	public function reportPluginActivated(
@@ -284,7 +297,8 @@ class Security
 	): void
 	{
 		$this->sender->reportRefusal('privileged_action',
-			'plugin activated: ' . (is_scalar($plugin) ? (string)$plugin : '?'));
+			'plugin activated: ' . (is_scalar($plugin) ? (string)$plugin : '?'),
+			['action' => 'plugin_activated']);
 	}
 	
 	/**
@@ -311,7 +325,8 @@ class Security
 		}
 		
 		$this->sender->reportRefusal('privileged_action',
-			'upgrader: ' . ($action !== '' ? $action : '?') . ' ' . $type);
+			'upgrader: ' . ($action !== '' ? $action : '?') . ' ' . $type,
+			['action' => 'upgrade_' . $type]);
 	}
 	
 	/**
@@ -329,7 +344,8 @@ class Security
 		}
 
 		$this->sender->reportRefusal('privileged_action',
-			'option changed: ' . (string)$option);
+			'option changed: ' . (string)$option,
+			['action' => 'option_change']);
 	}
 
 	/**
