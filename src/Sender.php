@@ -19,7 +19,9 @@ use function defined;
 use function error_get_last;
 use function error_reporting;
 use function function_exists;
+use function http_response_code;
 use function in_array;
+use function is_int;
 use function json_encode;
 use function mb_substr;
 use function register_shutdown_function;
@@ -495,6 +497,17 @@ class Sender
 			$context['referer'] = Redactor::scrubUrl($this->server('HTTP_REFERER'));
 			$context['ip'] = $this->server('REMOTE_ADDR');
 			$context['ua'] = $this->server('HTTP_USER_AGENT');
+			// the response status the request ended with — final here, since
+			// buildContext() runs from the shutdown flush after the response
+			// went out (WordPress' own 404 page has set 404 by then). Only an
+			// HTTP status counts; false (none decided) sends nothing rather
+			// than a guess — the console indexes it as the STATUS filter
+			$status = http_response_code();
+			
+			if(is_int($status) && $status >= 100 && $status <= 599)
+			{
+				$context['status'] = $status;
+			}
 			
 			if(session_status() === PHP_SESSION_ACTIVE)
 			{
