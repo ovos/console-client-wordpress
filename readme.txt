@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.7
+Stable tag: 0.5.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.8 =
+* New: the release announce. When the configured release label changes, the plugin tells the console once, on the next admin request (`POST /api/v1/ingest/release`), so the console knows the deploy the minute it happened rather than from the first tagged error — the STATS rail shows it, the verified close measures "silent since" from the real moment. `Sender::announceRelease()` is there for deploy hooks that want to say it themselves. Older consoles answer 404 and nothing else changes.
 
 = 0.5.7 =
 * New: every report from a web request carries the HTTP status the response ended with (`status`: 500, 404, 403 …), read at the shutdown flush after the response went out. The console (2026-09 release) indexes it: a STATUS column in the ERRORS grid, a filter by code (`500`) or class (`5xx`), the statuses an issue produced in its detail, and "all 403 responses" in the AI search and the MCP tools. CLI runs send none. Older consoles ignore the field.

@@ -47,6 +47,13 @@ final class Plugin
 		self::$instance->register();
 	}
 	
+	/**
+	 * The release label announced to the console last (SENDER.md §7) — a
+	 * deploy that changes the configured label is told once, on the next
+	 * admin request; removed on uninstall
+	 */
+	public const OPTION_ANNOUNCED = 'ovos_console_announced_release';
+	
 	public static function instance(): ?self
 	{
 		return self::$instance;
@@ -94,6 +101,29 @@ final class Plugin
 		if(is_admin())
 		{
 			(new Settings($this->config, $this->sender, $this->file))->register();
+			
+			// the deploy step a WordPress site rarely has: a changed release
+			// label is announced to the console once, on the next admin request
+			add_action('admin_init', [$this, 'announceRelease']);
+		}
+	}
+	
+	/**
+	 * admin_init: the configured release label, announced to the console the
+	 * first time it is seen (SENDER.md §7) — the option remembers what was
+	 * announced, so every later admin request costs one option read and no
+	 * HTTP call; a refused or unreachable console is retried on the next one
+	 */
+	public function announceRelease(): void
+	{
+		$release = $this->config->release();
+		if($release === '' || (string)get_option(self::OPTION_ANNOUNCED, '') === $release)
+		{
+			return;
+		}
+		if($this->sender->announceRelease($release) === 202)
+		{
+			update_option(self::OPTION_ANNOUNCED, $release, false);
 		}
 	}
 	

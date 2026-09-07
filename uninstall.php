@@ -11,6 +11,7 @@ if(is_multisite())
 		delete_option('ovos_console');
 		delete_option('ovos_console_inventory');
 		delete_option('ovos_console_inventory_dirty');
+delete_option('ovos_console_announced_release');
 		restore_current_blog();
 	}
 	
@@ -20,3 +21,4 @@ if(is_multisite())
 delete_option('ovos_console');
 delete_option('ovos_console_inventory');
 delete_option('ovos_console_inventory_dirty');
+delete_option('ovos_console_announced_release');

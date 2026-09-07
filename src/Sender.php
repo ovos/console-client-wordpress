@@ -22,6 +22,7 @@ use function function_exists;
 use function http_response_code;
 use function in_array;
 use function is_int;
+use function is_string;
 use function json_encode;
 use function mb_substr;
 use function register_shutdown_function;
@@ -35,6 +36,7 @@ use function str_starts_with;
 use function strlen;
 use function strpos;
 use function substr;
+use function trim;
 
 use const PHP_SESSION_ACTIVE;
 use const PHP_URL_HOST;
@@ -665,6 +667,71 @@ class Sender
 	protected function verifyTls(): bool
 	{
 		return (bool)apply_filters('ovos_console_sslverify', true);
+	}
+	
+	/**
+	 * Tells the console a release shipped — the deploy step a WordPress site
+	 * rarely has (SENDER.md §7): POST /api/v1/ingest/release with the key,
+	 * the configured release label unless one is given, optional at / ref /
+	 * source / environment. Synchronous through the WP HTTP API — an admin
+	 * request or a deploy hook, never the front end — and best-effort: the
+	 * response code back, 0 when the sender is off, no label is known or the
+	 * console is out of reach. Plugin::announceRelease() calls it when the
+	 * configured label changes.
+	 *
+	 * @param array{at?: int|string, ref?: string, source?: string, environment?: string} $options
+	 */
+	public function announceRelease(
+		string $release = '',
+		array $options = [],
+	): int
+	{
+		if($this->isEnabled() === false)
+		{
+			return 0;
+		}
+		$label = mb_substr(trim($release !== '' ? $release : $this->config->release()), 0, 64);
+		if($label === '')
+		{
+			return 0;
+		}
+		
+		$payload = [
+			'release' => $label,
+			'source' => mb_substr(trim((string)($options['source'] ?? 'wordpress-plugin')), 0, 32),
+		];
+		$at = $options['at'] ?? null;
+		if(is_int($at) || (is_string($at) && trim($at) !== ''))
+		{
+			$payload['at'] = is_int($at) ? $at : trim($at);
+		}
+		$ref = trim((string)($options['ref'] ?? ''));
+		if($ref !== '')
+		{
+			$payload['ref'] = mb_substr($ref, 0, 128);
+		}
+		$environment = trim((string)($options['environment'] ?? $this->config->environment()));
+		if($environment !== '')
+		{
+			$payload['environment'] = mb_substr($environment, 0, 64);
+		}
+		
+		$response = wp_remote_post($this->config->url() . '/api/v1/ingest/release', [
+			'timeout' => 5,
+			'headers' => [
+				'Content-Type' => 'application/json',
+				'X-Console-Key' => $this->config->apiKey(),
+			],
+			'body' => (string)json_encode($payload),
+			'sslverify' => $this->verifyTls(),
+		]);
+		
+		if(is_wp_error($response))
+		{
+			return 0;
+		}
+		
+		return (int)wp_remote_retrieve_response_code($response);
 	}
 	
 	protected function send(
