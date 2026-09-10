@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.8
+Stable tag: 0.5.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.5.9 =
+* New: a login that succeeded after failures names the account. The `auth_success` report carries the WordPress user id (`context.userId`) — `wp_login` fires before the current user is set, so the plugin passes the id explicitly; every other report already carried it. The console (2026-09 release) groups a security event by its kind and the account, never by the masked line, so one account's logins are one issue and the issue summary counts the user. `Sender::reportRefusal($kind, $message, $extra, $context)` takes the same optional per-event context (`['userId' => …]`) for your own calls. Older consoles ignore the field.
 
 = 0.5.8 =
 * New: the release announce. When the configured release label changes, the plugin tells the console once, on the next admin request (`POST /api/v1/ingest/release`), so the console knows the deploy the minute it happened rather than from the first tagged error — the STATS rail shows it, the verified close measures "silent since" from the real moment. `Sender::announceRelease()` is there for deploy hooks that want to say it themselves. Older consoles answer 404 and nothing else changes.

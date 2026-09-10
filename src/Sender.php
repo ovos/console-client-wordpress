@@ -9,6 +9,7 @@ use ErrorException;
 use Throwable;
 
 use function array_map;
+use function array_replace;
 use function array_slice;
 use function array_values;
 use function count;
@@ -219,6 +220,7 @@ class Sender
 		string $kind,
 		string $message = '',
 		array $extra = [],
+		array $context = [],
 	): void
 	{
 		if($this->config->securityEvents() === false
@@ -248,7 +250,14 @@ class Sender
 					'previous' => false,
 				],
 			];
-			
+			// the caller's word on the request context — the account it holds
+			// before the session does (wp_login fires before the current user
+			// is set); the flush merges it over the base it builds
+			if($context !== [])
+			{
+				$payload['context'] = $context;
+			}
+
 			$this->queue[] = $payload;
 		}
 		catch(Throwable)
@@ -444,7 +453,9 @@ class Sender
 		// project and the row's in META, so a misbehaving plugin version can
 		// be told apart from a healthy one without opening the site
 		$payload['client'] = 'wordpress/' . Plugin::VERSION;
-		$payload['context'] = $context['context']
+		// a per-event context (reportRefusal's fourth argument) wins over the
+		// base built at the flush — the identity a caller knew at its moment
+		$payload['context'] = array_replace($context['context'], $payload['context'] ?? [])
 			+ ['extra' => Redactor::scrub($payload['extra']) + $this->buildWpExtra($payload)];
 		unset($payload['extra']);
 		

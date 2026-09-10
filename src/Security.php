@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace OvosConsole;
 
 use WP_Error;
+use WP_User;
 
 use function implode;
 use function in_array;
@@ -138,12 +139,17 @@ class Security
 
 		// extra.failures is the EVIDENCE the console's rules ask about
 		// ("failures >= 3"): the larger of the two counts, since either a
-		// sprayed account or a hammering address is the stuffing signal
+		// sprayed account or a hammering address is the stuffing signal.
+		// context.userId names the ACCOUNT — wp_login fires before the current
+		// user is set, so the flush's get_current_user_id() is 0 here; the
+		// console groups a security event by kind and account, never by the
+		// masked line, so the id is what makes one account's logins one issue
 		$this->sender->reportRefusal('auth_success',
 			'login succeeded for ' . Redactor::maskName($login)
 			. ' after recent failures (account: ' . $account
 			. ', address: ' . $address . ')',
-			['failures' => max($account, $address)]);
+			['failures' => max($account, $address)],
+			$user instanceof WP_User && (int)$user->ID > 0 ? ['userId' => (string)$user->ID] : []);
 	}
 	
 	/**
