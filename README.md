@@ -2,9 +2,11 @@
 	<img src="docs/logo.svg" alt="ovos console — WordPress plugin" width="940">
 </p>
 
-# ovos console — self-hosted error monitoring for WordPress
+# ovos console — error monitoring for WordPress
 
-Sends a WordPress site's PHP errors, JavaScript errors, failed logins and scanner probes to an [ovos console](https://ovos.github.io/console/) instance **you** run. Self-hosted error tracking and error logging for WordPress: no per-event bill that grows with your traffic, and no stack traces or visitor data leaving your infrastructure.
+Sends a WordPress site's PHP errors, JavaScript errors, failed logins and scanner probes to the [ovos console](https://ovos.github.io/console/): error tracking and error logging for WordPress. You get **your own console instance** — run for you by ovos, or set up on your own infrastructure for larger organisations.
+
+**This plugin is the client, and it is free** — GPL-2.0, no account needed to read the code, no telemetry of its own. It talks to a console instance; [talk to us](#talk-to-us) about getting one.
 
 **Up to half of what a public WordPress site reports is not a bug.** It is automated traffic looking for a way in — `/wp-login.php`, `/wp-includes/ID3/file.php`, and a long tail of random filenames like `/tcxhzlea.php` probing for a backdoor someone else already installed. On our own instances, not-found probes and refused logins are around 45–50% of everything reported. The console counts those apart from real errors so they never drown your bug list, folds them into **attack waves** by the address behind them, and matches your installed plugins against a public vulnerability feed — so "vulnerable **and** being probed" is a thing you can see rather than guess.
 
@@ -25,7 +27,7 @@ What the plugin reports:
 
 **[Try the live demo →](https://console-demo.ovos.at/)** — a public instance filled with synthetic errors. No login, no sign-up: browse the grid, expand a row for the full backtrace and request context, filter the issues, look at the monitors. Changes are disabled, triage (check, star, resolve) is not — press <kbd>?</kbd> for the keyboard map.
 
-One console for everything you run, on infrastructure you control:
+One console for everything you run:
 
 - **Live** — errors from PHP, browser JavaScript, WordPress, Node.js and OpenTelemetry services land the moment they happen; an error storm is ingested through Redis Streams without slowing the app that reported it.
 - **Issues, not noise** — the same error a thousand times is one row with a count, fingerprinted into an issue with an open → resolved → regressed lifecycle.
@@ -34,7 +36,7 @@ One console for everything you run, on infrastructure you control:
 - **Alerting** — priority-gated, throttled email and chat notifications, per project.
 - **Ask your AI** — point Claude or any MCP client at the console and ask about your errors, or hit `◇ AI EXPLAIN` on any row for a plain-English root-cause read.
 
-Self-hosted, so stack traces and user data never leave your infrastructure — and no per-event bill that grows with your traffic. More on the [product page](https://ovos.github.io/console/); if you would rather not run it yourself, [we host it for you](https://ovos.at/en/contact/) from Vienna.
+Your own instance, not a shared tenancy — run for you by ovos in Vienna, or set up on your own infrastructure when the data has to stay there. More on the [product page](https://ovos.github.io/console/), or [write to us](#talk-to-us).
 
 ## In WordPress
 
@@ -314,9 +316,11 @@ Both are safe to call unconditionally — when the plugin is disabled or unconfi
 The console is built and run by [ovos](https://ovos.at/) in Vienna. We use it on our own client sites every day, which is why it is shaped the way it is.
 
 - **Questions about the plugin, or a bug in it** — open an [issue](https://github.com/ovos/console-client-wordpress/issues).
-- **Want the console itself, hosted or on your own servers?** Write to **[office@ovos.at](mailto:office@ovos.at)**. We are happy to walk you through it, set up an instance for your sites, or just answer whether it fits what you have.
+- **Want a console for your sites?** Write to **[office@ovos.at](mailto:office@ovos.at)**. You get your own instance: we run it for you, or for larger organisations we set one up on your own infrastructure. Happy to just answer whether it fits what you have.
 - **Try it first** — the [live demo](https://console-demo.ovos.at/) needs no login.
 
 ## License
 
-[GPL-2.0-or-later](LICENSE)
+This plugin is [GPL-2.0-or-later](LICENSE) and always will be — it is a WordPress plugin and a client, and you can read, fork and audit every line of what runs on your site.
+
+The ovos console it talks to is a commercial product — your own instance, run for you by ovos or set up on your infrastructure. It is not covered by this licence.
