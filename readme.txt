@@ -8,11 +8,13 @@ Stable tag: 0.6.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Connects your site to an ovos/console error-monitoring instance — PHP and JavaScript errors, grouped into issues, alerted, resolved.
+Self-hosted error monitoring for WordPress: PHP and JavaScript errors, 404 scanner probes and failed logins, on a console you run yourself.
 
 == Description ==
 
 This plugin reports errors from your WordPress site to a self-hosted [ovos console](https://ovos.github.io/console/) instance — one live dashboard for the errors of every site and service you run, grouped into issues, alerted and resolved, on infrastructure you control.
+
+**Up to half of what a public WordPress site reports is not a bug.** It is automated traffic looking for a way in — `/wp-login.php`, `/wp-includes/ID3/file.php`, and a long tail of random filenames probing for a backdoor someone else already installed. On our own instances, not-found probes and refused logins are around 45–50% of everything reported. The console counts those apart from real errors so they never drown your bug list, folds them into attack waves by the address behind them, and matches your installed plugins against a public vulnerability feed — so "vulnerable **and** being probed" is something you can see rather than guess.
 
 See it working first: the [live demo](https://console-demo.ovos.at/) is a public instance filled with synthetic errors, no login required.
 

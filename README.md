@@ -2,9 +2,13 @@
 	<img src="docs/logo.svg" alt="ovos console — WordPress plugin" width="940">
 </p>
 
-# ovos console — WordPress plugin
+# ovos console — self-hosted error monitoring for WordPress
 
-Reports errors from a WordPress site to a self-hosted [ovos console](https://ovos.github.io/console/) error-monitoring instance:
+Sends a WordPress site's PHP errors, JavaScript errors, failed logins and scanner probes to an [ovos console](https://ovos.github.io/console/) instance **you** run. Self-hosted error tracking and error logging for WordPress: no per-event bill that grows with your traffic, and no stack traces or visitor data leaving your infrastructure.
+
+**Up to half of what a public WordPress site reports is not a bug.** It is automated traffic looking for a way in — `/wp-login.php`, `/wp-includes/ID3/file.php`, and a long tail of random filenames like `/tcxhzlea.php` probing for a backdoor someone else already installed. On our own instances, not-found probes and refused logins are around 45–50% of everything reported. The console counts those apart from real errors so they never drown your bug list, folds them into **attack waves** by the address behind them, and matches your installed plugins against a public vulnerability feed — so "vulnerable **and** being probed" is a thing you can see rather than guess.
+
+What the plugin reports:
 
 - **PHP errors** — warnings, notices and fatals (uncaught exceptions included), batched into a single POST from the shutdown handler after the response went out. Fire-and-forget: every failure is swallowed, the HTTP call has a hard 1 s timeout — reporting can never break or noticeably slow the site.
 - **JavaScript errors** — the bundled browser client captures window errors, unhandled rejections and failed fetch/XHR calls, with breadcrumbs and an optional masked DOM snapshot (replay-lite). Reports carry automation evidence, zero-config: a `webdriver` admission (headless browsers, AI agents) and the external scripts the visitor never even attempted to load — the signature of bots that run inline JS without loading script files. The console indexes both as `flags`, so bot-caused issues facet and filter apart from real-user ones.
@@ -16,7 +20,7 @@ Reports errors from a WordPress site to a self-hosted [ovos console](https://ovo
 ## The console
 
 <p align="center">
-	<a href="https://console-demo.ovos.at/"><img src="https://ovos.github.io/console/assets/errors.png" alt="The ovos console errors grid — live rows with project, type, priority, message and occurrence counts" width="940"></a>
+	<a href="https://console-demo.ovos.at/"><img src="https://ovos.github.io/console/assets/errors.png" alt="The ovos console ERRORS grid: live PHP and JavaScript errors from several sites with project, priority, message, URI and occurrence counts, and scanner probes folded into attack waves with a BLOCKLIST action" width="940"></a>
 </p>
 
 **[Try the live demo →](https://console-demo.ovos.at/)** — a public instance filled with synthetic errors. No login, no sign-up: browse the grid, expand a row for the full backtrace and request context, filter the issues, look at the monitors. Changes are disabled, triage (check, star, resolve) is not — press <kbd>?</kbd> for the keyboard map.
@@ -31,6 +35,16 @@ One console for everything you run, on infrastructure you control:
 - **Ask your AI** — point Claude or any MCP client at the console and ask about your errors, or hit `◇ AI EXPLAIN` on any row for a plain-English root-cause read.
 
 Self-hosted, so stack traces and user data never leave your infrastructure — and no per-event bill that grows with your traffic. More on the [product page](https://ovos.github.io/console/); if you would rather not run it yourself, [we host it for you](https://ovos.at/en/contact/) from Vienna.
+
+## In WordPress
+
+One settings screen under **Settings → ovos console**, and nothing else: no dashboard widget, no menu entry, no database tables, no cron of its own.
+
+<p align="center">
+	<img src="docs/settings.png" alt="The plugin's settings screen in WordPress admin: console URL and API key, log level, switches for 404 reporting, traffic rollups, security events and software inventory, release label and environment, and the browser-error options including trace correlation and DOM snapshots" width="940">
+</p>
+
+Every switch is off until you turn it on, and each one says exactly what it sends. Anything you would rather set in code — the URL, the keys, the log level — can come from `wp-config.php` constants instead, in which case the field shows as locked.
 
 ## Requirements
 
@@ -294,6 +308,14 @@ Both are safe to call unconditionally — when the plugin is disabled or unconfi
 - `assets/console-client.js` is a bundled copy of the console's browser client (intentionally ES5 — do not modernize); it is synced from the console repository on client releases, never edited here.
 - `readme.txt` is the wordpress.org-format readme; this file is for GitHub.
 - Releasing: push a `v*` tag whose version matches the plugin header and readme.txt stable tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) — the release workflow verifies the versions, builds the zip via `git archive` and publishes a GitHub release with `ovos-console.zip` attached.
+
+## Talk to us
+
+The console is built and run by [ovos](https://ovos.at/) in Vienna. We use it on our own client sites every day, which is why it is shaped the way it is.
+
+- **Questions about the plugin, or a bug in it** — open an [issue](https://github.com/ovos/console-client-wordpress/issues).
+- **Want the console itself, hosted or on your own servers?** Write to **[office@ovos.at](mailto:office@ovos.at)**. We are happy to walk you through it, set up an instance for your sites, or just answer whether it fits what you have.
+- **Try it first** — the [live demo](https://console-demo.ovos.at/) needs no login.
 
 ## License
 
