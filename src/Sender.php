@@ -87,6 +87,35 @@ class Sender
 	
 	protected const MAX_BODY = 262144;
 	
+	/**
+	 * What the console's REPLAY needs to re-issue the request that failed
+	 * (docs/SENDER.md §context.request): the raw body, its content type and
+	 * the headers that change what the site answers. The caps are the
+	 * console's own — a longer body is CUT, not dropped, since the head of a
+	 * body is still a body.
+	 */
+	protected const BODY_MAX = 16384;
+	
+	protected const CONTENT_TYPE_MAX = 128;
+	
+	protected const HEADER_VALUE_MAX = 1024;
+	
+	protected const HEADERS_MAX = 24;
+	
+	/** the standard names worth sending; the site's own `x-…` go too (buildHeaders) */
+	protected const REQUEST_HEADERS = ['accept', 'accept-language', 'accept-charset', 'accept-encoding',
+		'content-type', 'x-requested-with'];
+	
+	/**
+	 * Never sent. The forwarding family describes the VISITOR — their address,
+	 * the host they asked for — and a replay carrying them would claim to come
+	 * from that person, through headers plugins routinely trust for rate
+	 * limits, geo and access rules.
+	 */
+	protected const HEADERS_NEVER = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-port',
+		'x-forwarded-proto', 'x-forwarded-server', 'x-real-ip', 'forwarded'];
+	
+	
 	protected const FATAL_TYPES = [
 		E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR,
 	];
@@ -257,7 +286,7 @@ class Sender
 			{
 				$payload['context'] = $context;
 			}
-
+			
 			$this->queue[] = $payload;
 		}
 		catch(Throwable)
@@ -561,7 +590,15 @@ class Sender
 	
 	/**
 	 * Request variables, redacted before sending (the console scrubs
-	 * again server-side as a backstop)
+	 * again server-side as a backstop).
+	 *
+	 * Beside get/post this logs what the console's REPLAY needs to re-issue
+	 * the request that failed (docs/SENDER.md §context.request): the raw
+	 * BODY with its content type, and the request headers that change what
+	 * the site answers. A REST or admin-ajax call carrying JSON has an EMPTY
+	 * $_POST — the body is a stream PHP never parses into fields — so
+	 * without these the console can only replay such a write as a bare
+	 * method and URL, which is a different request wearing the same name.
 	 */
 	protected function buildRequest(): array
 	{
@@ -579,7 +616,92 @@ class Sender
 		}
 		// phpcs:enable WordPress.Security.NonceVerification, WordPress.Security.ValidatedSanitizedInput
 		
+		$contentType = $this->server('CONTENT_TYPE');
+		if($contentType !== '')
+		{
+			$request['contentType'] = substr($contentType, 0, self::CONTENT_TYPE_MAX);
+		}
+		
+		$body = $this->readBody($contentType);
+		if($body !== '')
+		{
+			$request['body'] = Redactor::scrubText($body);
+		}
+		
+		$headers = $this->buildHeaders();
+		if($headers !== [])
+		{
+			$request['headers'] = $headers;
+		}
+		
 		return $request;
+	}
+	
+	/**
+	 * The raw request body, capped. php://input is re-readable for every
+	 * content type EXCEPT multipart/form-data, which is skipped anyway: an
+	 * upload's body is megabytes of binary and $_POST already carries its
+	 * fields. A GET never has one worth reading.
+	 */
+	protected function readBody(
+		string $contentType,
+	): string
+	{
+		if($this->server('REQUEST_METHOD') === 'GET'
+			|| stripos($contentType, 'multipart/form-data') !== false)
+		{
+			return '';
+		}
+		
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- php://input is the request body, not a filesystem read; WP_Filesystem does not address it
+		$body = @file_get_contents('php://input', false, null, 0, self::BODY_MAX);
+		
+		return is_string($body) ? $body : '';
+	}
+	
+	/**
+	 * The request headers worth sending: the ones that change what the site
+	 * ANSWERS, plus its own X- names — never a cookie, an authorization or
+	 * anything else secret by name, and never the forwarding family, which
+	 * describes the VISITOR (their address, the host they asked for): a
+	 * replay carrying those would claim to come from that person, through
+	 * headers plugins routinely trust for rate limits, geo and access.
+	 *
+	 * @return array<string, string>
+	 */
+	protected function buildHeaders(): array
+	{
+		$headers = [];
+		
+		foreach(array_keys($_SERVER) as $key)
+		{
+			if(count($headers) >= self::HEADERS_MAX)
+			{
+				break;
+			}
+			
+			$key = (string)$key;
+			if(strpos($key, 'HTTP_') !== 0)
+			{
+				continue;
+			}
+			
+			$name = strtolower(str_replace('_', '-', substr($key, 5)));
+			if(!in_array($name, self::REQUEST_HEADERS, true) && strpos($name, 'x-') !== 0)
+			{
+				continue;
+			}
+			
+			// the secret names are the Redactor's one list, never a copy of it
+			if(in_array($name, self::HEADERS_NEVER, true) || Redactor::isSecretName($name))
+			{
+				continue;
+			}
+			
+			$headers[$name] = substr($this->server($key), 0, self::HEADER_VALUE_MAX);
+		}
+		
+		return $headers;
 	}
 	
 	/**

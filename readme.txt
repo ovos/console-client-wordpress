@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.5.9
+Stable tag: 0.6.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,12 @@ The plugin is distributed as a release zip from its [GitHub repository](https://
 From 0.4.5 on the plugin keeps itself current: its `Update URI` header points WordPress core's own update flow at this repository's GitHub releases, so new versions appear under Dashboard → Updates and install like any directory plugin — including unattended, via the plugin's "Enable auto-updates" toggle (`wp plugin auto-updates enable ovos-console`). No updater plugin and no license key involved; a failed check simply means "no update visible right now".
 
 == Changelog ==
+
+= 0.6.0 =
+* New: a report can carry the request BODY, so the console can re-issue the request that actually failed. Three optional keys ride beside `request.get` / `request.post`: `contentType`, `body` (the raw body, 16 KB) and `headers` (an allow list). This exists for the case the form fields cannot describe — a REST or admin-ajax call carrying JSON has an EMPTY `$_POST`, because the body is a stream PHP never parses into fields, so the console could only replay such a write as a bare method and URL. That is a different request wearing the same name: the site answers 400 and the replay reports "clean", a wrong answer rather than a missing one. With the body it goes back out as itself.
+* Redaction: the raw body is scrubbed before it leaves the site, by the same secret names that drop a field — read out of the punctuation a body is written in (`"password": "x"`, `password=x`), with e-mail values masked as everywhere else. `Redactor::scrubText()` and the field, header and body rules now derive from ONE list, so a name added to it takes effect in all three. A `multipart/form-data` body is never read (binary, large, and its fields are already in `post`), and a body the scrubber touched is refused by the console's replay rather than re-sent with the mask in it.
+* Headers: only the names that change what the site ANSWERS are sent — `accept*`, `content-type`, `x-requested-with` and your own `x-…`. Never a cookie or an authorization, and never the forwarding family (`x-forwarded-for`, `x-forwarded-host`, `x-real-ip` …): those describe the VISITOR, and a replay carrying them would claim to come from that person through headers plugins routinely trust for rate limits, geo and access rules. The console applies the same allow list again on write.
+* The console only ever repeats a write (POST, PUT, PATCH, DELETE) when someone ticked SAFE TO REPEAT on that issue, and only against hosts its operator listed. Older consoles ignore all three keys, and a site that sends them to one loses nothing.
 
 = 0.5.9 =
 * New: a login that succeeded after failures names the account. The `auth_success` report carries the WordPress user id (`context.userId`) — `wp_login` fires before the current user is set, so the plugin passes the id explicitly; every other report already carried it. The console (2026-09 release) groups a security event by its kind and the account, never by the masked line, so one account's logins are one issue and the issue summary counts the user. `Sender::reportRefusal($kind, $message, $extra, $context)` takes the same optional per-event context (`['userId' => …]`) for your own calls. Older consoles ignore the field.

@@ -35,11 +35,26 @@ use function trim;
 final class Redactor
 {
 	/**
-	 * Field names whose value is dropped ([redacted]). pass(word|wd)? also
-	 * covers pass1/pass2/user_pass as a substring; pwd is wp-login's field.
+	 * The secret names, as a bare regex FRAGMENT, because the list is needed
+	 * in three shapes: matched against a field name (REDACT_PATTERN, used by
+	 * scrub() and scrubUrl()), against a header name (isSecretName()), and
+	 * spliced into the "<name> = <value>" search scrubText() runs over a raw
+	 * request body. All three derive from this one list on purpose — a name
+	 * added here has to take effect in every one of them, or the redaction
+	 * grows a hole exactly where someone believed they closed one.
+	 *
+	 * The group is NON-capturing deliberately: scrubText() splices this in
+	 * beside numbered backreferences, and a capturing group here shifts every
+	 * one of them so the search silently matches nothing.
+	 *
+	 * pass(?:word|wd)? also covers pass1/pass2/user_pass as a substring; pwd
+	 * is wp-login's field.
 	 */
-	protected const REDACT_PATTERN =
-		'/pass(word|wd)?|pwd|token|secret|authorization|cookie|api[-_]key/i';
+	protected const SECRET_NAMES =
+		'pass(?:word|wd)?|pwd|token|secret|authorization|cookie|api[-_]key';
+	
+	/** the names above, matched against a field name */
+	protected const REDACT_PATTERN = '/' . self::SECRET_NAMES . '/i';
 	
 	/**
 	 * Field names whose value is masked to every MASK_GROUP-th character, the
@@ -333,7 +348,7 @@ final class Redactor
 		. '|woff2?|ttf|otf|eot'
 		. '|svg|png|jpe?g|gif|webp|avif|ico|bmp'
 		. '|mp3|mp4|webm|ogg|wav)$~i';
-		
+	
 	/**
 	 * See PATH_CANDIDATE: a generated token, not a slug. Where it is genuinely
 	 * ambiguous this errs towards redaction — an unreadable URI costs less than
@@ -436,5 +451,57 @@ final class Redactor
 				=> self::maskName($match[1]) . '@' . $match[2],
 			$value,
 		);
+	}
+	
+	/**
+	 * Whether a NAME is one whose value never leaves the site — the same list
+	 * scrub() drops by key, asked about a header name (docs/SENDER.md
+	 * §context.request). One list, one answer.
+	 */
+	public static function isSecretName(
+		string $name,
+	): bool
+	{
+		return preg_match(self::REDACT_PATTERN, $name) === 1;
+	}
+	
+	/**
+	 * Scrubs a raw TEXT body the way scrub() scrubs an array — by the same
+	 * secret NAMES, but read out of the punctuation a body is written in
+	 * rather than off an array key: `"password": "x"`, `password=x`,
+	 * `'secret' => 'x'`.
+	 *
+	 * For the console's replay keys (docs/SENDER.md §context.request): a JSON
+	 * or XML body has no keys to walk, so without this the credential inside
+	 * it would travel whole — and the console stores the body precisely so it
+	 * can REPLAY the request, which would post that credential straight back
+	 * at this site.
+	 *
+	 * An auth SCHEME counts as part of the value, so `Authorization: Bearer x`
+	 * collapses to one [redacted] rather than redacting the word Bearer and
+	 * then the token behind it. E-mails are masked as everywhere else.
+	 * Idempotent: [redacted] and a mask both survive a second pass, so the
+	 * console scrubbing again server-side agrees with this.
+	 */
+	public static function scrubText(
+		string $text,
+	): string
+	{
+		if($text === '')
+		{
+			return $text;
+		}
+		
+		// the same names REDACT_PATTERN matches, read out of a body's punctuation
+		$text = (string)preg_replace_callback(
+			'/(["\']?)([A-Za-z0-9_.\-]{0,24}(?:' . self::SECRET_NAMES . ')'
+				. '[A-Za-z0-9_.\-]{0,24})\1(\s*(?:=>|[:=])\s*)(["\']?)'
+				. '(?:(?:bearer|basic|token|digest)\s+)?([^"\'\s,;)&}]{1,512})\4/i',
+			static fn(array $match): string => $match[1] . $match[2] . $match[1]
+				. $match[3] . $match[4] . '[redacted]' . $match[4],
+			$text,
+		);
+		
+		return self::maskEmails($text);
 	}
 }
