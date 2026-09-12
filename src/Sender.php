@@ -116,6 +116,27 @@ class Sender
 		'x-forwarded-proto', 'x-forwarded-server', 'x-real-ip', 'forwarded'];
 	
 	
+	/**
+	 * The PHP files WordPress itself puts in the document root. A `.php` file
+	 * sitting beside them that is NOT on this list was put there by somebody,
+	 * which is the whole point of sourceFor()'s `unknown`.
+	 */
+	protected const CORE_ROOT_FILES = ['index.php', 'wp-activate.php', 'wp-blog-header.php',
+		'wp-comments-post.php', 'wp-config.php', 'wp-config-sample.php', 'wp-cron.php',
+		'wp-links-opml.php', 'wp-load.php', 'wp-login.php', 'wp-mail.php', 'wp-settings.php',
+		'wp-signup.php', 'wp-trackback.php', 'xmlrpc.php'];
+	
+	/**
+	 * The drop-ins WordPress loads out of `wp-content/` by name. A caching
+	 * plugin installs `advanced-cache.php` on half the sites in the world, so
+	 * they get their own label rather than reading as `unknown` forever.
+	 */
+	protected const CONTENT_DROPINS = ['advanced-cache.php', 'object-cache.php', 'db.php',
+		'db-error.php', 'install.php', 'maintenance.php', 'fatal-error-handler.php',
+		'php-error.php', 'sunrise.php', 'blog-deleted.php', 'blog-inactive.php',
+		'blog-suspended.php'];
+	
+	
 	protected const FATAL_TYPES = [
 		E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR,
 	];
@@ -732,7 +753,26 @@ class Sender
 	}
 	
 	/**
-	 * Attributes an error file to the plugin or theme it lives in
+	 * Attributes an error's file to the component that shipped it: a plugin,
+	 * a mu-plugin, a theme, WordPress core — or nobody.
+	 *
+	 * That last case is why this method matters beyond tidy reporting. The
+	 * fallback used to be `core` for every path outside a plugin or theme
+	 * root, so a PHP error thrown from `wp-content/uploads/2026/09/x.php` was
+	 * filed as an error in WordPress itself. A dropped webshell is precisely
+	 * the file that throws once and never again, and `core` is the one label
+	 * that makes it invisible.
+	 *
+	 * The vocabulary is closed:
+	 *
+	 *   plugin:<slug>, mu-plugin:<slug>, theme:<slug>   it lives there
+	 *   core      wp-admin/, wp-includes/, or one of core's own root files
+	 *   dropin    a wp-content/ drop-in WordPress loads by name
+	 *   uploads   under the uploads directory, where no PHP belongs
+	 *   unknown   under the site and shipped by nobody — the interesting one
+	 *
+	 * `uploads` and `unknown` are not accusations. They are the two labels
+	 * worth a second look, and the console is where that look happens.
 	 */
 	protected function sourceFor(
 		string $file,
@@ -769,7 +809,65 @@ class Sender
 			}
 		}
 		
-		return 'core';
+		// wp_get_upload_dir() is the variant that does NOT create the directory
+		// as a side effect the way wp_upload_dir() does — an error path must
+		// never write to disk
+		$uploads = function_exists('wp_get_upload_dir')
+			? (string)(wp_get_upload_dir()['basedir'] ?? '')
+			: '';
+		
+		if($uploads !== ''
+			&& str_starts_with($file, rtrim(str_replace('\\', '/', $uploads), '/') . '/'))
+		{
+			return 'uploads';
+		}
+		
+		return $this->coreOrUnknown($file);
+	}
+	
+	/**
+	 * Core's tree is `wp-admin/`, `wp-includes/` and a fixed set of root
+	 * files. Anything else under the document root arrived some other way,
+	 * and anything outside it is not ours to label at all.
+	 */
+	protected function coreOrUnknown(
+		string $file,
+	): string
+	{
+		$root = defined('ABSPATH')
+			? rtrim(str_replace('\\', '/', (string)ABSPATH), '/') . '/'
+			: '';
+		
+		if($root === '' || str_starts_with($file, $root) === false)
+		{
+			// a system include, a symlinked library, an eval'd frame: outside
+			// the site, so "unknown" states the truth without accusing anyone
+			return 'unknown';
+		}
+		
+		$relative = substr($file, strlen($root));
+		
+		if(str_starts_with($relative, 'wp-admin/') || str_starts_with($relative, 'wp-includes/'))
+		{
+			return 'core';
+		}
+		
+		if(in_array($relative, self::CORE_ROOT_FILES, true))
+		{
+			return 'core';
+		}
+		
+		$content = defined('WP_CONTENT_DIR')
+			? rtrim(str_replace('\\', '/', (string)WP_CONTENT_DIR), '/') . '/'
+			: '';
+		
+		if($content !== '' && str_starts_with($file, $content)
+			&& in_array(substr($file, strlen($content)), self::CONTENT_DROPINS, true))
+		{
+			return 'dropin';
+		}
+		
+		return 'unknown';
 	}
 	
 	protected function homeHost(): string
