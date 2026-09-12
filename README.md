@@ -1,14 +1,14 @@
 <p align="center">
-	<img src="docs/logo.svg" alt="ovos console — WordPress plugin" width="940">
+	<img src="docs/header.png" alt="ovos console — the WordPress client: from the first error to the verified fix" width="940">
 </p>
 
-# ovos console — error monitoring for WordPress
+# ovos console — error monitoring and cyberdefence for WordPress
 
-Sends a WordPress site's PHP errors, JavaScript errors, failed logins and scanner probes to the [ovos console](https://ovos.github.io/console/): error tracking and error logging for WordPress. You get **your own console instance** — run for you by ovos, or set up on your own infrastructure for larger organisations.
+**Error monitoring and cyberdefence, built for the AI era.** This plugin sends a WordPress site's PHP errors, JavaScript errors, failed logins and scanner probes to the [ovos console](https://ovos.github.io/console/), which ranks what broke, proposes the fix, and reads the attacks on your site as a map of your weak spots. You get **your own console instance** — run for you by ovos, or set up on your own infrastructure for larger organisations.
 
 **This plugin is the client, and it is free** — GPL-2.0, no account needed to read the code, no telemetry of its own. It talks to a console instance; [talk to us](#talk-to-us) about getting one.
 
-**Up to half of what a public WordPress site reports is not a bug.** It is automated traffic looking for a way in — `/wp-login.php`, `/wp-includes/ID3/file.php`, and a long tail of random filenames like `/tcxhzlea.php` probing for a backdoor someone else already installed. On our own instances, not-found probes and refused logins are around 45–50% of everything reported. The console counts those apart from real errors so they never drown your bug list, folds them into **attack waves** by the address behind them, and matches your installed plugins against a public vulnerability feed — so "vulnerable **and** being probed" is a thing you can see rather than guess.
+**Your site is probed every day, and that half of the traffic is worth reading.** Roughly 45–50% of what a public WordPress site reports on our own instances is not a bug: it is `/wp-login.php`, `/wp-includes/ID3/file.php` and a long tail of random filenames hunting for someone else's backdoor. Old scanners walked a list. AI-driven ones read your answers, and they find holes that sat quiet for years. So the console does not file probes away as noise. It counts them apart from real errors, folds them into **attack waves** by the address behind them, matches your installed plugins against a public vulnerability feed — "vulnerable **and** being probed" is a thing you can see rather than guess — and can replay the request against your site to check whether the door is still open.
 
 What the plugin reports:
 
