@@ -8,6 +8,7 @@ use function apply_filters;
 use function array_pop;
 use function basename;
 use function bin2hex;
+use function class_exists;
 use function count;
 use function defined;
 use function dirname;
@@ -36,6 +37,7 @@ use function is_multisite;
 use function is_string;
 use function max;
 use function md5_file;
+use function method_exists;
 use function microtime;
 use function preg_match;
 use function preg_replace;
@@ -260,6 +262,25 @@ class Scan
 	 */
 	protected const ROOT_OWNERS = [
 		'wordfence-waf.php' => ['wordfence'],
+	];
+	
+	/**
+	 * The security plugins whose presence answers a posture question — a
+	 * login rate limit, a second factor, an upload scanner — by slug among
+	 * the ACTIVE plugins. The console prints the gap where none is found:
+	 * these are commodity features the plugin deliberately does not
+	 * re-implement (docs/plans/wordpress-cyberprotection-brainstorm.md).
+	 */
+	protected const PROTECTION = [
+		'login_protection' => ['limit-login-attempts-reloaded', 'wordfence', 'better-wp-security', 'ithemes-security-pro',
+			'all-in-one-wp-security-and-firewall', 'wp-cerber', 'loginizer', 'wp-simple-firewall', 'ninjafirewall',
+			'sucuri-scanner', 'login-lockdown', 'wp-limit-login-attempts', 'limit-login-attempts', 'malcare-security',
+			'security-malware-firewall', 'defender-security'],
+		'two_factor' => ['two-factor', 'wp-2fa', 'miniorange-2-factor-authentication', 'google-authenticator',
+			'two-factor-authentication', 'duo-wordpress', 'wordfence', 'better-wp-security', 'ithemes-security-pro',
+			'all-in-one-wp-security-and-firewall', 'wp-simple-firewall', 'defender-security'],
+		'upload_scanner' => ['wordfence', 'ninjafirewall', 'wp-cerber', 'sucuri-scanner', 'malcare-security',
+			'wp-simple-firewall', 'security-malware-firewall', 'defender-security', 'antivirus', 'gotmls'],
 	];
 	
 	/**
@@ -1468,6 +1489,8 @@ class Scan
 		$windows = DIRECTORY_SEPARATOR === '\\';
 		
 		$debug = defined('WP_DEBUG') && (bool)WP_DEBUG;
+		$active = $this->activeSlugs();
+		$debugLog = $this->debugLog($roots);
 		
 		$state['posture'] = [
 			'server' => $server,
@@ -1488,6 +1511,10 @@ class Scan
 			'uploads_php_denied' => in_array($server, ['apache', 'litespeed'], true) ? (bool)$state['uploads_php_denied'] : null,
 			'vcs_exposed' => $state['vcs'],
 			'readme_html' => is_file($roots['root'] . '/readme.html'),
+			'login_protection' => $this->protection('login_protection', $active),
+			'two_factor' => $this->protection('two_factor', $active),
+			'upload_scanner' => $this->protection('upload_scanner', $active),
+			'debug_log' => $debugLog !== null,
 			'ini' => [
 				'auto_prepend_file' => $this->clean((string)ini_get('auto_prepend_file')),
 				'auto_append_file' => $this->clean((string)ini_get('auto_append_file')),
@@ -1500,6 +1527,18 @@ class Scan
 				'opcache' => (bool)ini_get('opcache.enable'),
 			],
 		];
+		
+		if($debugLog !== null)
+		{
+			// WP_DEBUG_LOG on a production site: the log leaks paths, queries
+			// and stack traces to anyone who asks for it by URL
+			$stat = @stat($debugLog);
+			
+			$this->finding($state, str_starts_with($debugLog, $roots['content'] . '/') ? 'content' : 'root', $debugLog,
+				'debug_log_public', self::TIER_HIGH,
+				'WP_DEBUG_LOG writes a web-reachable file' . ($stat === false ? '' : ' (' . (int)round((int)$stat['size'] / 1024) . ' KB)'),
+				$stat === false ? [] : ['size' => (int)$stat['size'], 'mtime' => (int)$stat['mtime']]);
+		}
 		
 		foreach(['auto_prepend_file', 'auto_append_file'] as $key)
 		{
@@ -1889,6 +1928,89 @@ class Scan
 		}
 		
 		return null;
+	}
+	
+	/**
+	 * The active plugins' slugs — directory names, or the file name of a
+	 * single-file plugin — network-activated ones included
+	 *
+	 * @return list<string>
+	 */
+	protected function activeSlugs(): array
+	{
+		$files = (array)get_option('active_plugins', []);
+		
+		if(function_exists('is_multisite') && is_multisite())
+		{
+			foreach((array)get_option('active_sitewide_plugins', []) as $file => $time)
+			{
+				$files[] = $file;
+			}
+		}
+		
+		$slugs = [];
+		
+		foreach($files as $file)
+		{
+			if(is_string($file) === false)
+			{
+				continue;
+			}
+			
+			$directory = dirname($file);
+			$slugs[] = $directory === '.' || $directory === '' ? basename($file, '.php') : $directory;
+		}
+		
+		return $slugs;
+	}
+	
+	/**
+	 * The first active plugin that answers a protection question, '' when
+	 * none does. Jetpack counts for the login question only with its
+	 * Protect module on.
+	 *
+	 * @param list<string> $active
+	 */
+	protected function protection(
+		string $kind,
+		array $active,
+	): string
+	{
+		foreach(self::PROTECTION[$kind] ?? [] as $slug)
+		{
+			if(in_array($slug, $active, true))
+			{
+				return $slug;
+			}
+		}
+		
+		if($kind === 'login_protection' && in_array('jetpack', $active, true)
+			&& class_exists('Jetpack') && method_exists('Jetpack', 'is_module_active') && \Jetpack::is_module_active('protect'))
+		{
+			return 'jetpack';
+		}
+		
+		return '';
+	}
+	
+	/**
+	 * The debug log's path when WP_DEBUG_LOG writes one UNDER the document
+	 * root and the file exists — the leak; null when logging is off, the
+	 * file is absent, or it lives outside the site where it belongs
+	 */
+	protected function debugLog(
+		array $roots,
+	): ?string
+	{
+		if(defined('WP_DEBUG_LOG') === false || (bool)WP_DEBUG_LOG === false)
+		{
+			return null;
+		}
+		
+		$path = is_string(WP_DEBUG_LOG) && WP_DEBUG_LOG !== '' ? WP_DEBUG_LOG : $roots['content'] . '/debug.log';
+		$path = $this->normalize($path);
+		
+		return is_file($path) && str_starts_with($path, $roots['root'] . '/') ? $path : null;
 	}
 	
 	protected function server(): string

@@ -147,6 +147,7 @@ Every value lives under **Settings → ovos console** and can alternatively be s
 | Traffic rollups | `OVOS_CONSOLE_ROLLUPS` | `false` | anonymous per-minute request counters (status / method / resolved page type / logged-in splits, no URLs or visitor data) so the console reads probe counts as rates — requires the APCu extension (silently inert without it) and the project's rollups switch |
 | Security events | `OVOS_CONSOLE_SECURITY_EVENTS` | `false` | refused actions as informational `security` events — failed logins (username masked), rejected nonce checks, REST 401/403s, sensitive admin changes; rate-limited to 60/min |
 | Software inventory | `OVOS_CONSOLE_INVENTORY` | `false` | installed plugin/theme/core versions for the console's CVE matching — daily and on change, inert until the project's CVE switch is also on in the console |
+| Auto-update probed vulnerable plugins | `OVOS_CONSOLE_AUTO_UPDATE_VULNERABLE` | `false` | when the console says an installed plugin is vulnerable AND being probed, switch on WordPress' own auto-update for exactly that plugin; needs the inventory and the project's Auto-update switch in the console; each switch-on is a security event |
 | Integrity scan | `OVOS_CONSOLE_SCAN` | `false` | the background read-only walk for files nobody shipped and the site's hardening posture — half a second per request, one pass per interval; the Scan now button on the settings page works without it |
 | Scan interval | `OVOS_CONSOLE_SCAN_INTERVAL` | `7` | days between background passes (1 = daily, 7 = weekly) |
 | Release label | `OVOS_CONSOLE_RELEASE` | — | optional deploy label (git sha, version), max 64 chars |
@@ -275,6 +276,11 @@ core → themes, so an interrupted pass has already covered the urgent part):
 | **database** — administrators (registration date, sessions, last login), application passwords on admins, active plugins whose file is gone, scheduled hooks nobody listens to, uninstall callables of gone plugins, options carrying code markers, foreign scripts / iframes / obfuscation in published content and widgets, a site URL disagreeing with its constant, registration into a role above subscriber | info – high | the attacker's other filesystem; ids, option names and hook names only — never a login, an e-mail, a value or a post body |
 | a directory under uploads or in the root that changed after its newest file | info | something was removed or renamed here recently — dated, so the console can hold it against the waves |
 | a file owned by another uid than its siblings; a symlink leaving the site | high | the web server writing among the deploy user's files; the symlink attack (silent on Windows and single-uid hosting) |
+
+Plus which protection is present — the active login-rate-limit, two-factor and
+upload-scanner plugins, or "none detected" (commodity features this plugin
+deliberately does not re-implement) — and a `debug.log` written under the
+document root as a high finding.
 
 Plus the **posture**: `DISALLOW_FILE_EDIT`, `DISALLOW_FILE_MODS`, debug
 display, whether uploads denies PHP by `.htaccess` (Apache/LiteSpeed only),

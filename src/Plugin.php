@@ -75,7 +75,7 @@ final class Plugin
 		// handler registers last, inventory being the least urgent send
 		if($this->config->inventory())
 		{
-			(new Inventory($this->config))->register();
+			(new Inventory($this->config, $this->sender))->register();
 		}
 		
 		// the integrity scan: a Scan now button on the settings page always,

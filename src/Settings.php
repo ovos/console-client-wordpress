@@ -104,6 +104,7 @@ class Settings
 			'rollups' => $this->truthy($input['rollups'] ?? ''),
 			'security_events' => $this->truthy($input['security_events'] ?? ''),
 			'inventory' => $this->truthy($input['inventory'] ?? ''),
+			'auto_update_vulnerable' => $this->truthy($input['auto_update_vulnerable'] ?? ''),
 			'scan' => $this->truthy($input['scan'] ?? ''),
 			'scan_interval' => in_array((int)($input['scan_interval'] ?? 7), [1, 7], true)
 				? (int)$input['scan_interval']
@@ -190,6 +191,9 @@ class Settings
 		$this->checkboxField('inventory',
 			__('Software inventory', 'ovos-console'),
 			__('Report the installed plugin/theme list with versions (plus WordPress core and PHP versions) once a day and after installs, updates or (de)activations, so the console can match it against a public vulnerability feed (CVE findings on its SECURITY view). Exactly what is sent per entry: type, directory slug, version, display name, active flag — never paths, options or user data. Inert until the project\'s CVE switch is also enabled in the console.', 'ovos-console'));
+		$this->checkboxField('auto_update_vulnerable',
+			__('Auto-update probed vulnerable plugins', 'ovos-console'),
+			__('When the console\'s vulnerability matching says an installed plugin is vulnerable AND the console has seen requests probing for it, switch on WordPress\' own automatic update for exactly that plugin — the one virtual patch WordPress supports natively. Needs the software inventory above and the project\'s Auto-update switch in the console; every switch-on is reported as a security event. Nothing is downgraded, deactivated or deleted, and WordPress updates from wordpress.org on its own schedule.', 'ovos-console'));
 		$this->scanFields();
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
@@ -720,6 +724,7 @@ class Settings
 			'dir_changed' => __('directory changed after its newest file (something removed)', 'ovos-console'),
 			'owner_anomaly' => __('file owned by another uid than its siblings', 'ovos-console'),
 			'symlink_outside' => __('symlink leaving the site', 'ovos-console'),
+			'debug_log_public' => __('debug.log written to a web-reachable path', 'ovos-console'),
 			default => $detector,
 		};
 	}
@@ -762,6 +767,10 @@ class Settings
 			'disable_functions: ' . ((string)($ini['disable_functions'] ?? '') !== '' ? (string)$ini['disable_functions'] : $no),
 			'open_basedir: ' . ((string)($ini['open_basedir'] ?? '') !== '' ? $yes : $no),
 			'OPcache: ' . $word($ini['opcache'] ?? null),
+			__('Login protection plugin', 'ovos-console') . ': ' . ((string)($posture['login_protection'] ?? '') !== '' ? (string)$posture['login_protection'] : __('none detected', 'ovos-console')),
+			__('Two-factor plugin', 'ovos-console') . ': ' . ((string)($posture['two_factor'] ?? '') !== '' ? (string)$posture['two_factor'] : __('none detected', 'ovos-console')),
+			__('Upload scanner plugin', 'ovos-console') . ': ' . ((string)($posture['upload_scanner'] ?? '') !== '' ? (string)$posture['upload_scanner'] : __('none detected', 'ovos-console')),
+			__('debug.log under the site', 'ovos-console') . ': ' . $word($posture['debug_log'] ?? null),
 		];
 	}
 }

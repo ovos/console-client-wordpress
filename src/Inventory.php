@@ -9,6 +9,7 @@ use Throwable;
 use function add_action;
 use function apply_filters;
 use function array_slice;
+use function array_unique;
 use function array_values;
 use function basename;
 use function curl_exec;
@@ -25,6 +26,8 @@ use function get_site_option;
 use function get_stylesheet;
 use function in_array;
 use function is_array;
+use function is_string;
+use function json_decode;
 use function json_encode;
 use function ksort;
 use function mb_substr;
@@ -48,6 +51,10 @@ use const PHP_VERSION;
  * plugin/mu-plugin/theme list with versions and active flags) so the
  * console's nightly cve-sync can match it against the vulnerability feed —
  * and nothing else: no paths, no options, no users, no configuration.
+ *
+ * The console's answer may carry `auto_update`: the installed plugins that
+ * are vulnerable AND being probed — with the plugin's own opt-in, WordPress's
+ * automatic update is switched on for exactly those (apply()).
  *
  * OPT-IN TWICE, like rollups: the inventory setting here (default off,
  * lockable via OVOS_CONSOLE_INVENTORY in wp-config.php) and cve_enabled on
@@ -101,6 +108,7 @@ class Inventory
 	
 	public function __construct(
 		protected Config $config,
+		protected ?Sender $sender = null,
 	)
 	{
 	}
@@ -352,6 +360,85 @@ class Inventory
 			CURLOPT_SSL_VERIFYHOST => $verify ? 2 : 0,
 		]);
 		
-		curl_exec($handle);
+		$body = curl_exec($handle);
+		
+		$this->apply(is_string($body) ? $body : '');
+	}
+	
+	/**
+	 * The console's answer may name the installed plugins that are VULNERABLE
+	 * AND BEING PROBED (docs/plans/wordpress-cyberprotection-brainstorm.md,
+	 * P4). With the auto_update_vulnerable setting on, WordPress's own
+	 * automatic update is switched on for exactly those — the one virtual
+	 * patch WordPress supports natively — and each switch-on is reported as
+	 * a privileged_action so the console's audit trail carries it. Off by
+	 * default and opt-in at both ends: the console names plugins only when
+	 * the project's own switch is on. Nothing is downgraded, deactivated or
+	 * deleted here; WordPress updates from wordpress.org on its own clock.
+	 */
+	protected function apply(
+		string $body,
+	): void
+	{
+		if($this->config->autoUpdateVulnerable() === false || $body === '')
+		{
+			return;
+		}
+		
+		$decoded = json_decode($body, true, 4);
+		$slugs = [];
+		
+		foreach(is_array($decoded) && is_array($decoded['auto_update'] ?? null) ? $decoded['auto_update'] : [] as $slug)
+		{
+			if(is_string($slug) && self::slugOf($slug) === $slug)
+			{
+				$slugs[] = $slug;
+			}
+		}
+		
+		if($slugs === [])
+		{
+			return;
+		}
+		
+		if(function_exists('get_plugins') === false)
+		{
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+		
+		$enabled = (array)get_option('auto_update_plugins', []);
+		$added = [];
+		
+		foreach((array)get_plugins() as $file => $headers)
+		{
+			$directory = dirname((string)$file);
+			
+			if($directory !== '.' && in_array($directory, $slugs, true) && in_array($file, $enabled, true) === false)
+			{
+				$enabled[] = (string)$file;
+				$added[] = $directory;
+			}
+		}
+		
+		if($added === [])
+		{
+			return;
+		}
+		
+		update_option('auto_update_plugins', array_values(array_unique($enabled)));
+		
+		if($this->sender !== null)
+		{
+			foreach($added as $slug)
+			{
+				$this->sender->reportRefusal('privileged_action',
+					'auto-update enabled for ' . $slug . ' (vulnerable and probed, per the console)',
+					['action' => 'auto_update_enabled']);
+			}
+			
+			// the Sender's own shutdown flush already ran — this handler
+			// registered after it — so the audit line ships from here
+			$this->sender->flush();
+		}
 	}
 }

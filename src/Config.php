@@ -31,6 +31,7 @@ class Config
 		'rollups' => false,
 		'security_events' => false,
 		'inventory' => false,
+		'auto_update_vulnerable' => false,
 		'scan' => false,
 		'scan_interval' => 7,
 		'release' => '',
@@ -114,6 +115,15 @@ class Config
 	public function inventory(): bool
 	{
 		return (bool)$this->get('inventory');
+	}
+	
+	/**
+	 * Switch on WordPress's automatic update for the plugins the console
+	 * names as vulnerable AND probed (Inventory::apply) — opt-in at both ends
+	 */
+	public function autoUpdateVulnerable(): bool
+	{
+		return (bool)$this->get('auto_update_vulnerable');
 	}
 	
 	public function securityEvents(): bool
