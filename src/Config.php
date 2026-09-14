@@ -31,6 +31,8 @@ class Config
 		'rollups' => false,
 		'security_events' => false,
 		'inventory' => false,
+		'scan' => false,
+		'scan_interval' => 7,
 		'release' => '',
 		'environment' => '',
 		'js_enabled' => true,
@@ -117,6 +119,23 @@ class Config
 	public function securityEvents(): bool
 	{
 		return (bool)$this->get('security_events');
+	}
+	
+	/**
+	 * The background integrity scan (ScanRunner) — the Scan now button on the
+	 * settings page does not depend on it
+	 */
+	public function scan(): bool
+	{
+		return (bool)$this->get('scan');
+	}
+	
+	/**
+	 * Days between background passes, daily to monthly
+	 */
+	public function scanInterval(): int
+	{
+		return max(1, min(30, (int)$this->get('scan_interval')));
 	}
 	
 	public function release(): string

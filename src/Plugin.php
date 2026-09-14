@@ -12,7 +12,7 @@ use function strtok;
  */
 final class Plugin
 {
-	public const VERSION = '0.6.0';
+	public const VERSION = '0.7.0';
 	
 	/**
 	 * Fixed 60-second cap on 404 access-event reports, so a hard scan cannot
@@ -78,6 +78,12 @@ final class Plugin
 			(new Inventory($this->config))->register();
 		}
 		
+		// the integrity scan: a Scan now button on the settings page always,
+		// a shutdown-time background pass when its own switch is on — read-
+		// only and chunked; its shutdown handler registers after the others
+		$scan = new ScanRunner($this->config, new Scan($this->config));
+		$scan->register();
+		
 		(new JsClient($this->config, $this->file))->register();
 		
 		// self-update from the plugin's GitHub releases, through core's
@@ -100,7 +106,7 @@ final class Plugin
 		
 		if(is_admin())
 		{
-			(new Settings($this->config, $this->sender, $this->file))->register();
+			(new Settings($this->config, $this->sender, $this->file, $scan))->register();
 			
 			// the deploy step a WordPress site rarely has: a changed release
 			// label is announced to the console once, on the next admin request

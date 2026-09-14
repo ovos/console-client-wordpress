@@ -121,7 +121,7 @@ class Sender
 	 * sitting beside them that is NOT on this list was put there by somebody,
 	 * which is the whole point of sourceFor()'s `unknown`.
 	 */
-	protected const CORE_ROOT_FILES = ['index.php', 'wp-activate.php', 'wp-blog-header.php',
+	public const CORE_ROOT_FILES = ['index.php', 'wp-activate.php', 'wp-blog-header.php',
 		'wp-comments-post.php', 'wp-config.php', 'wp-config-sample.php', 'wp-cron.php',
 		'wp-links-opml.php', 'wp-load.php', 'wp-login.php', 'wp-mail.php', 'wp-settings.php',
 		'wp-signup.php', 'wp-trackback.php', 'xmlrpc.php'];
@@ -131,7 +131,7 @@ class Sender
 	 * plugin installs `advanced-cache.php` on half the sites in the world, so
 	 * they get their own label rather than reading as `unknown` forever.
 	 */
-	protected const CONTENT_DROPINS = ['advanced-cache.php', 'object-cache.php', 'db.php',
+	public const CONTENT_DROPINS = ['advanced-cache.php', 'object-cache.php', 'db.php',
 		'db-error.php', 'install.php', 'maintenance.php', 'fatal-error-handler.php',
 		'php-error.php', 'sunrise.php', 'blog-deleted.php', 'blog-inactive.php',
 		'blog-suspended.php'];

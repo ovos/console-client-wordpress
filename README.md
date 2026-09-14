@@ -18,6 +18,7 @@ What the plugin reports:
 - **Traffic rollups (opt-in)** — anonymous per-minute request counters, so the console can read error and scanner-probe counts as *rates* against real traffic instead of raw numbers — and, since 0.5.1, request-duration histograms beside them, so the console's PERFORMANCE panel answers "did the update make the site slow?" with ≈p50/≈p95 trends and the slowest pages. Never URLs, IPs, visitor data or raw timings — see [Traffic rollups](#traffic-rollups) below. Requires the APCu PHP extension.
 - **Security events (opt-in)** — what WordPress *refused*, beside what broke: failed logins, rejected nonce checks, forbidden REST calls, and sensitive admin changes. Usernames masked, rate-limited — see [Security events](#security-events) below.
 - **Software inventory (opt-in)** — the installed plugin/theme list with versions, reported once a day and after installs, updates or (de)activations, so the console can match it against a public vulnerability feed and show CVE findings — including "vulnerable AND being probed" — on its SECURITY view. Per entry: type, slug, version, display name, active flag; never paths, options or user data. See [Software inventory](#software-inventory) below.
+- **Integrity scan (opt-in background pass, plus a Scan now button)** — a read-only walk of the site's files for what nobody shipped: PHP under uploads, media files that open with a PHP tag, PHP in the document root WordPress did not ship, hidden PHP, `.htaccess`/`.user.ini` directives that make other files execute or redirect visitors, drop-ins and plugin data directories without their plugin — plus the hardening posture. Paths, sizes and dates only, never content; nothing is ever changed. Results show on the settings page and go to the console's SECURITY view. See [Integrity scan](#integrity-scan) below.
 
 ## The console
 
@@ -146,6 +147,8 @@ Every value lives under **Settings → ovos console** and can alternatively be s
 | Traffic rollups | `OVOS_CONSOLE_ROLLUPS` | `false` | anonymous per-minute request counters (status / method / resolved page type / logged-in splits, no URLs or visitor data) so the console reads probe counts as rates — requires the APCu extension (silently inert without it) and the project's rollups switch |
 | Security events | `OVOS_CONSOLE_SECURITY_EVENTS` | `false` | refused actions as informational `security` events — failed logins (username masked), rejected nonce checks, REST 401/403s, sensitive admin changes; rate-limited to 60/min |
 | Software inventory | `OVOS_CONSOLE_INVENTORY` | `false` | installed plugin/theme/core versions for the console's CVE matching — daily and on change, inert until the project's CVE switch is also on in the console |
+| Integrity scan | `OVOS_CONSOLE_SCAN` | `false` | the background read-only walk for files nobody shipped and the site's hardening posture — half a second per request, one pass per interval; the Scan now button on the settings page works without it |
+| Scan interval | `OVOS_CONSOLE_SCAN_INTERVAL` | `7` | days between background passes (1 = daily, 7 = weekly) |
 | Release label | `OVOS_CONSOLE_RELEASE` | — | optional deploy label (git sha, version), max 64 chars |
 | Report JS errors | `OVOS_CONSOLE_JS_ENABLED` | `true` | loads the bundled browser client on the front end |
 | JS key | `OVOS_CONSOLE_JS_KEY` | — | the project's public js_key (browser errors) |
@@ -243,6 +246,58 @@ findings: installed version, the version that fixes it, CVSS — and a
 PROBED count when the console has already seen requests naming that
 plugin's path, which is the "you run X *and* someone is looking for it"
 signal worth acting on first.
+
+### Integrity scan
+
+Every other sensor in this plugin needs the foreign file to *do* something after
+the plugin is installed: throw an error (so `source` can say `uploads` or
+`unknown`), be saved through the editor, be activated. A webshell dropped before
+the plugin arrived, used once and left behind, does none of that. The integrity
+scan asks the tree directly.
+
+What it looks for, in a read-only walk (root → uploads → wp-content → plugins →
+core → themes, so an interrupted pass has already covered the urgent part):
+
+| finding | tier | what it catches |
+|---------|------|-----------------|
+| executable-shaped file under uploads (`x.php`, `shell.php.jpg`, `.phtml`, `.phar`) | urgent | the classic drop — the `index.php` listing stubs plugins write there are recognised and skipped |
+| media file whose first kilobyte carries `<?php` / `<?=` (`.ico .jpg .png .gif .webp .bmp .pdf .svg`; `.txt .log .csv` under uploads) | urgent | the `favicon_a1b2.ico` family, the image behind an `AddHandler` |
+| PHP in the document root that is not one of core's own root files | urgent | `about.php`, `wp-conflg.php`; Wordfence's `wordfence-waf.php` is recognised when Wordfence is installed |
+| `.htaccess` / `.user.ini` / `php.ini` directives: `auto_prepend_file` / `auto_append_file` to a file no installed plugin owns, `AddHandler`/`AddType` mapping PHP to another extension, `SetHandler` to PHP, `engine on` or CGI under uploads, `RewriteRule`/`Redirect`/`ErrorDocument` to another host | urgent / high | persistence, the polyglot's trigger, the redirect hack — reported as directive kind, file and line, never the line's text |
+| the live `auto_prepend_file` / `auto_append_file` of the PHP configuration | urgent | the `.user.ini` trick from the running interpreter's point of view |
+| PHP in a hidden path (`.x.php`, `.well-known/…`) | high | the hidden drop — dotfile tool configs in vendored packages are recognised |
+| PHP in `wp-content` outside any plugin, theme, mu-plugin or upload path | high | `wp-content/strange/s.php`; WordPress' own `.l10n.php` translations are recognised |
+| a drop-in (`object-cache.php`, `advanced-cache.php`, `db.php`, `wp-cache-config.php`) with none of its known plugins installed and no vendor header | high | the shell disguised as a cache config — a drop-in with a vendor header or an installed owner is listed as `info` |
+| a plugin data directory (`wflogs`, `w3tc-config`, `updraft`, …) whose plugin is not installed | high | listed and never descended: the directory is the finding |
+| must-use plugins, drop-ins with an owner, `install.php` | info / high | listed for the operator; `install.php` on a live site is high |
+
+Plus the **posture**: `DISALLOW_FILE_EDIT`, `DISALLOW_FILE_MODS`, debug
+display, whether uploads denies PHP by `.htaccess` (Apache/LiteSpeed only),
+world-writable uploads, world-readable `wp-config.php`, XML-RPC, open
+registration and its default role, version control in the document root,
+`readme.html`, and the ini fingerprint (`auto_prepend_file`, `open_basedir`,
+`disable_functions`, `user_ini.filename`, OPcache).
+
+What it never does: write, delete, rename, quarantine or touch `.htaccess`;
+follow a symlink; descend into `.git`, `node_modules`, `wp-content/cache` or
+`wp-content/upgrade`; read more than the first kilobyte of a media file or
+64 KB of a directive file; send a file's content. Findings are paths, sizes
+and dates. A finding is a place to look, not a verdict.
+
+**Scan now** — the button under Settings → ovos console → Integrity scan. Each
+round spends up to fifteen seconds (always five short of `max_execution_time`)
+and the page re-submits itself until the pass is complete; the results table
+stays on that page, console or not. **Background** — the *Integrity scan*
+switch (or `OVOS_CONSOLE_SCAN`): half a second per request after the response
+went out, one pass per interval (`OVOS_CONSOLE_SCAN_INTERVAL`, `1` or `7`
+days), the position kept in one option between requests, no WP-Cron, no APCu.
+A completed pass is posted to the console's `/api/v1/ingest/files` (the
+SECURITY view); a console without that endpoint answers 404 and the settings
+page still shows the result.
+
+The tier on a finding is the plugin's proposal. The console decides — against
+the project's repository where one is mapped, the attack waves of the same
+hours, and what an operator has already acknowledged.
 
 ### Security events
 

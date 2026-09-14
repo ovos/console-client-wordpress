@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace OvosConsole;
 
 use function array_keys;
+use function implode;
+use function in_array;
 use function is_array;
 use function max;
 use function mb_substr;
@@ -37,6 +39,7 @@ class Settings
 		protected Config $config,
 		protected Sender $sender,
 		protected string $file,
+		protected ScanRunner $runner,
 	)
 	{
 	}
@@ -101,6 +104,10 @@ class Settings
 			'rollups' => $this->truthy($input['rollups'] ?? ''),
 			'security_events' => $this->truthy($input['security_events'] ?? ''),
 			'inventory' => $this->truthy($input['inventory'] ?? ''),
+			'scan' => $this->truthy($input['scan'] ?? ''),
+			'scan_interval' => in_array((int)($input['scan_interval'] ?? 7), [1, 7], true)
+				? (int)$input['scan_interval']
+				: 7,
 			'release' => mb_substr(sanitize_text_field((string)($input['release'] ?? '')), 0, 64),
 			'environment' => mb_substr(sanitize_text_field((string)($input['environment'] ?? '')), 0, 64),
 			'js_enabled' => $this->truthy($input['js_enabled'] ?? ''),
@@ -150,6 +157,7 @@ class Settings
 		}
 		
 		$this->renderTestNotice();
+		$this->renderScanNotice();
 		
 		echo '<div class="wrap"><h1>' . esc_html__('ovos console', 'ovos-console') . '</h1>';
 		
@@ -182,6 +190,7 @@ class Settings
 		$this->checkboxField('inventory',
 			__('Software inventory', 'ovos-console'),
 			__('Report the installed plugin/theme list with versions (plus WordPress core and PHP versions) once a day and after installs, updates or (de)activations, so the console can match it against a public vulnerability feed (CVE findings on its SECURITY view). Exactly what is sent per entry: type, directory slug, version, display name, active flag — never paths, options or user data. Inert until the project\'s CVE switch is also enabled in the console.', 'ovos-console'));
+		$this->scanFields();
 		$this->inputField('release',
 			__('Release label', 'ovos-console'), 'text', '',
 			__('Optional deploy label (git sha, version), max 64 characters.', 'ovos-console'));
@@ -237,6 +246,8 @@ class Settings
 		{
 			echo '<p>' . esc_html__('Save an enabled configuration (console URL + API key) first, then send a test error.', 'ovos-console') . '</p>';
 		}
+		
+		$this->renderScanSection();
 		
 		echo '</div>';
 	}
@@ -400,5 +411,338 @@ class Settings
 				. '</code> ' . esc_html__('is defined in wp-config.php — the value is locked.', 'ovos-console')
 				. '</p>';
 		}
+	}
+	
+	/**
+	 * The integrity-scan controls in the settings table: the background
+	 * switch and its cadence. The Scan now button lives in its own section
+	 * below the form and needs neither.
+	 */
+	protected function scanFields(): void
+	{
+		$this->checkboxField('scan',
+			__('Integrity scan', 'ovos-console'),
+			__('Walk this site\'s files in the background for what nobody shipped — PHP under uploads, images that open with a PHP tag, files in the document root WordPress did not ship, .htaccess directives that make images execute, drop-ins without an installed plugin behind them — plus the site\'s hardening posture, and send the findings to the console. Read-only: nothing is ever deleted or changed. Half a second per request after the response went out, one full pass per interval. The Scan now button below works without this switch.', 'ovos-console'));
+		
+		$locked = $this->config->isConstant('scan_interval');
+		$current = $this->config->scanInterval();
+		
+		echo '<tr><th scope="row"><label for="ovos-console-scan-interval">'
+			. esc_html__('Scan interval', 'ovos-console') . '</label></th><td>';
+		
+		echo '<select id="ovos-console-scan-interval"'
+			. ' name="' . esc_attr(Config::OPTION . '[scan_interval]') . '"'
+			. ($locked ? ' disabled' : '') . '>';
+		
+		foreach([1 => __('daily', 'ovos-console'), 7 => __('weekly', 'ovos-console')] as $days => $label)
+		{
+			echo '<option value="' . esc_attr((string)$days) . '"'
+				. selected($current, $days, false) . '>' . esc_html($label) . '</option>';
+		}
+		
+		echo '</select>';
+		
+		$this->fieldNotes('scan_interval', $locked,
+			__('How often the background pass runs.', 'ovos-console'));
+		
+		echo '</td></tr>';
+	}
+	
+	/**
+	 * The outcome of a manual scan round, read back from our own redirect
+	 */
+	protected function renderScanNotice(): void
+	{
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- reads an outcome word set by our own redirect; matched against a closed list, display only
+		if(isset($_GET['ovos-console-scan']) === false)
+		{
+			return;
+		}
+		
+		$outcome = sanitize_key((string)$_GET['ovos-console-scan']);
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+		
+		[$class, $message] = match($outcome)
+		{
+			'done' => ['notice-success', __('Scan finished — the findings are below.', 'ovos-console')],
+			'running' => ['notice-info', __('Scan in progress — this page continues it until the pass is complete.', 'ovos-console')],
+			'busy' => ['notice-warning', __('Another request is scanning right now — try again in a minute.', 'ovos-console')],
+			'failed' => ['notice-error', __('The scan round failed — the position is kept; Continue resumes it.', 'ovos-console')],
+			default => ['', ''],
+		};
+		
+		if($message === '')
+		{
+			return;
+		}
+		
+		echo '<div class="notice ' . esc_attr($class) . ' is-dismissible"><p>'
+			. esc_html($message) . '</p></div>';
+	}
+	
+	/**
+	 * Below the form: the Scan now button (or the pass in progress), then
+	 * the last completed pass — its findings and the site's posture
+	 */
+	protected function renderScanSection(): void
+	{
+		echo '<hr><h2>' . esc_html__('Integrity scan', 'ovos-console') . '</h2>';
+		echo '<p>' . esc_html__('A read-only walk of this site\'s files for what nobody shipped: PHP under uploads, images that open with a PHP tag, files in the document root WordPress did not ship, hidden PHP, .htaccess and .user.ini directives that make other files execute or send visitors elsewhere, drop-ins and plugin data directories without their plugin — and the hardening posture the advice depends on. Results stay on this page and are sent to the console when one is connected. Nothing is ever deleted or changed; a finding is a place to look, not a verdict.', 'ovos-console') . '</p>';
+		
+		$state = $this->runner->state();
+		
+		if($state !== null)
+		{
+			$this->renderScanProgress($state);
+		}
+		else
+		{
+			echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+			
+			wp_nonce_field(ScanRunner::ACTION);
+			
+			echo '<input type="hidden" name="action" value="' . esc_attr(ScanRunner::ACTION) . '">';
+			
+			submit_button(__('Scan now', 'ovos-console'), 'secondary', 'submit', false);
+			
+			echo '</form>';
+		}
+		
+		$last = $this->runner->last();
+		
+		if($last !== null)
+		{
+			$this->renderScanResult($last);
+		}
+	}
+	
+	/**
+	 * A pass in progress: where it stands, and the Continue form — which a
+	 * manual pass submits by itself, round after round, until it is done
+	 */
+	protected function renderScanProgress(
+		array $state,
+	): void
+	{
+		$progress = Scan::progress($state);
+		
+		echo '<p><strong>' . esc_html__('Scan in progress', 'ovos-console') . '</strong> — '
+			. esc_html(sprintf(
+				/* translators: 1: the area being walked, 2: files counted so far, 3: findings so far */
+				__('walking %1$s, %2$s files so far, %3$d findings', 'ovos-console'),
+				$progress['area'],
+				number_format_i18n($progress['files']),
+				$progress['findings'])) . '</p>';
+		
+		echo '<form method="post" id="ovos-console-scan-continue" action="'
+			. esc_url(admin_url('admin-post.php')) . '">';
+		
+		wp_nonce_field(ScanRunner::ACTION);
+		
+		echo '<input type="hidden" name="action" value="' . esc_attr(ScanRunner::ACTION) . '">';
+		
+		submit_button(__('Continue', 'ovos-console'), 'secondary', 'submit', false);
+		
+		echo '</form>';
+		
+		if(($state['mode'] ?? '') === 'manual')
+		{
+			wp_print_inline_script_tag('window.setTimeout(function () { document.getElementById("ovos-console-scan-continue").submit(); }, 400);');
+		}
+	}
+	
+	/**
+	 * The last completed pass: one summary line, the findings table (every
+	 * path escaped — it is attacker-authored), the area roots, the posture
+	 */
+	protected function renderScanResult(
+		array $last,
+	): void
+	{
+		$report = (array)$last['report'];
+		$scan = (array)($report['scan'] ?? []);
+		$counts = (array)($scan['counts'] ?? []);
+		$truncated = (array)($scan['truncated'] ?? []);
+		$findings = (array)($report['findings'] ?? []);
+		$sent = (int)($last['sent'] ?? -1);
+		$format = (string)get_option('date_format') . ' ' . (string)get_option('time_format');
+		
+		$delivery = match(true)
+		{
+			$sent === 202 => __('accepted by the console', 'ovos-console'),
+			$sent === -1 => __('kept here only — no console configured', 'ovos-console'),
+			$sent === 0 => __('console unreachable', 'ovos-console'),
+			default => sprintf(
+				/* translators: %d: HTTP status code */
+				__('console answered HTTP %d', 'ovos-console'),
+				$sent),
+		};
+		
+		echo '<p>' . esc_html(sprintf(
+			/* translators: 1: date and time, 2: manual or background, 3: file count, 4: seconds, 5: delivery outcome */
+			__('Last scan: %1$s (%2$s) — %3$s files in %4$s s, %5$s.', 'ovos-console'),
+			date_i18n($format, (int)$last['finished']),
+			($scan['mode'] ?? '') === 'manual' ? __('manual', 'ovos-console') : __('background', 'ovos-console'),
+			number_format_i18n((int)($scan['files'] ?? 0)),
+			number_format_i18n(((int)($scan['duration'] ?? 0)) / 1000, 1),
+			$delivery)) . '</p>';
+		
+		if(($scan['complete'] ?? true) === false)
+		{
+			echo '<p>' . esc_html__('The pass did not complete — the findings below are from the part that was walked.', 'ovos-console') . '</p>';
+		}
+		
+		if($findings === [])
+		{
+			echo '<p><strong>' . esc_html__('No findings.', 'ovos-console') . '</strong></p>';
+		}
+		else
+		{
+			echo '<p><strong>' . esc_html(sprintf(
+				/* translators: 1: urgent count, 2: high count, 3: informational count */
+				__('%1$d urgent, %2$d high, %3$d informational.', 'ovos-console'),
+				(int)($counts[Scan::TIER_URGENT] ?? 0),
+				(int)($counts[Scan::TIER_HIGH] ?? 0),
+				(int)($counts[Scan::TIER_INFO] ?? 0))) . '</strong>';
+			
+			$left = (int)($truncated[Scan::TIER_URGENT] ?? 0) + (int)($truncated[Scan::TIER_HIGH] ?? 0)
+				+ (int)($truncated[Scan::TIER_INFO] ?? 0);
+			
+			if($left > 0)
+			{
+				echo ' ' . esc_html(sprintf(
+					/* translators: %d: findings past the cap */
+					__('%d more were counted but not listed.', 'ovos-console'),
+					$left));
+			}
+			
+			echo '</p>';
+			
+			echo '<table class="widefat striped"><thead><tr>'
+				. '<th>' . esc_html__('Tier', 'ovos-console') . '</th>'
+				. '<th>' . esc_html__('File', 'ovos-console') . '</th>'
+				. '<th>' . esc_html__('What', 'ovos-console') . '</th>'
+				. '<th>' . esc_html__('Detail', 'ovos-console') . '</th>'
+				. '<th>' . esc_html__('Modified', 'ovos-console') . '</th>'
+				. '</tr></thead><tbody>';
+			
+			foreach($findings as $finding)
+			{
+				$finding = (array)$finding;
+				$mtime = (int)($finding['mtime'] ?? 0);
+				
+				echo '<tr>'
+					. '<td>' . esc_html($this->tierWord((string)($finding['tier'] ?? ''))) . '</td>'
+					. '<td><code>' . esc_html((string)($finding['area'] ?? '') . ':' . (string)($finding['path'] ?? '')
+						. (isset($finding['line']) ? ':' . (int)$finding['line'] : '')) . '</code></td>'
+					. '<td>' . esc_html($this->detectorLabel((string)($finding['detector'] ?? ''))) . '</td>'
+					. '<td>' . esc_html((string)($finding['detail'] ?? '')) . '</td>'
+					. '<td>' . esc_html($mtime > 0 ? date_i18n($format, $mtime) : '') . '</td>'
+					. '</tr>';
+			}
+			
+			echo '</tbody></table>';
+			
+			$roots = [];
+			
+			foreach((array)($report['areas'] ?? []) as $area => $stats)
+			{
+				$roots[] = (string)$area . ' = ' . (string)(((array)$stats)['root'] ?? '');
+			}
+			
+			echo '<p class="description">' . esc_html(implode(' · ', $roots)) . '</p>';
+		}
+		
+		echo '<h3>' . esc_html__('Posture', 'ovos-console') . '</h3><ul>';
+		
+		foreach($this->postureLines((array)($report['posture'] ?? [])) as $line)
+		{
+			echo '<li>' . esc_html($line) . '</li>';
+		}
+		
+		echo '</ul>';
+	}
+	
+	protected function tierWord(
+		string $tier,
+	): string
+	{
+		return match($tier)
+		{
+			Scan::TIER_URGENT => __('urgent', 'ovos-console'),
+			Scan::TIER_HIGH => __('high', 'ovos-console'),
+			default => __('info', 'ovos-console'),
+		};
+	}
+	
+	protected function detectorLabel(
+		string $detector,
+	): string
+	{
+		return match($detector)
+		{
+			'uploads_php' => __('PHP file under uploads', 'ovos-console'),
+			'polyglot' => __('PHP code in a media file', 'ovos-console'),
+			'root_php' => __('PHP file in the document root that WordPress did not ship', 'ovos-console'),
+			'root_php_owned' => __('PHP file in the document root (owned by a plugin)', 'ovos-console'),
+			'hidden_php' => __('PHP file in a hidden path', 'ovos-console'),
+			'content_php' => __('PHP file in wp-content outside any plugin or theme', 'ovos-console'),
+			'mu_plugin' => __('must-use plugin (loads on every request)', 'ovos-console'),
+			'dropin' => __('drop-in', 'ovos-console'),
+			'dropin_orphan' => __('drop-in without an installed owner or a vendor header', 'ovos-console'),
+			'writer_dir' => __('plugin data directory (not scanned)', 'ovos-console'),
+			'writer_dir_orphan' => __('plugin data directory whose plugin is not installed', 'ovos-console'),
+			'directive_prepend' => __('auto_prepend/append directive to a file nobody owns', 'ovos-console'),
+			'directive_owned' => __('auto_prepend/append directive (owned by a plugin)', 'ovos-console'),
+			'handler_php_extension' => __('PHP handler mapped to another extension', 'ovos-console'),
+			'set_handler_php' => __('SetHandler to PHP', 'ovos-console'),
+			'engine_on_uploads' => __('PHP engine switched on under uploads', 'ovos-console'),
+			'cgi_uploads' => __('CGI execution under uploads', 'ovos-console'),
+			'redirect_external' => __('redirect to another host', 'ovos-console'),
+			'ini_prepend' => __('auto_prepend/append file live in php.ini', 'ovos-console'),
+			'ini_prepend_owned' => __('auto_prepend/append file live in php.ini (owned by a plugin)', 'ovos-console'),
+			default => $detector,
+		};
+	}
+	
+	/**
+	 * The posture block as plain lines — what the removal advice leans on
+	 *
+	 * @return string[]
+	 */
+	protected function postureLines(
+		array $posture,
+	): array
+	{
+		if($posture === [])
+		{
+			return [__('not recorded', 'ovos-console')];
+		}
+		
+		$yes = __('yes', 'ovos-console');
+		$no = __('no', 'ovos-console');
+		$unknown = __('unknown', 'ovos-console');
+		$word = static fn(mixed $value): string => $value === null ? $unknown : ($value ? $yes : $no);
+		$ini = (array)($posture['ini'] ?? []);
+		$vcs = (array)($posture['vcs_exposed'] ?? []);
+		
+		return [
+			__('Web server', 'ovos-console') . ': ' . (string)($posture['server'] ?? $unknown),
+			__('File editor disabled (DISALLOW_FILE_EDIT)', 'ovos-console') . ': ' . $word($posture['file_edit_disabled'] ?? null),
+			__('File modifications disabled (DISALLOW_FILE_MODS)', 'ovos-console') . ': ' . $word($posture['file_mods_disabled'] ?? null),
+			__('Debug output displayed', 'ovos-console') . ': ' . $word($posture['debug_display'] ?? null),
+			__('PHP execution denied under uploads by .htaccess', 'ovos-console') . ': ' . $word($posture['uploads_php_denied'] ?? null),
+			__('Uploads directory writable by everyone', 'ovos-console') . ': ' . $word($posture['uploads_world_writable'] ?? null),
+			__('wp-config.php readable by everyone', 'ovos-console') . ': ' . $word($posture['config_world_readable'] ?? null),
+			__('XML-RPC enabled', 'ovos-console') . ': ' . $word($posture['xmlrpc'] ?? null),
+			__('Registration open', 'ovos-console') . ': ' . $word($posture['users_can_register'] ?? null)
+				. (($posture['users_can_register'] ?? false) ? ' (' . (string)($posture['default_role'] ?? '') . ')' : ''),
+			__('Version control in the document root', 'ovos-console') . ': ' . ($vcs === [] ? $no : implode(', ', $vcs)),
+			__('readme.html present', 'ovos-console') . ': ' . $word($posture['readme_html'] ?? null),
+			'auto_prepend_file: ' . ((string)($ini['auto_prepend_file'] ?? '') !== '' ? (string)$ini['auto_prepend_file'] : $no),
+			'disable_functions: ' . ((string)($ini['disable_functions'] ?? '') !== '' ? (string)$ini['disable_functions'] : $no),
+			'open_basedir: ' . ((string)($ini['open_basedir'] ?? '') !== '' ? $yes : $no),
+			'OPcache: ' . $word($ini['opcache'] ?? null),
+		];
 	}
 }
