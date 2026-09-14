@@ -8,6 +8,7 @@ use WP_Application_Passwords;
 use WP_Session_Tokens;
 
 use function _get_cron_array;
+use function array_fill;
 use function array_key_exists;
 use function class_exists;
 use function count;
@@ -78,6 +79,26 @@ class Database
 	 * players, CDNs. A `<script src>` to any other host in post content is
 	 * the injection to look at.
 	 */
+	/**
+	 * Where a theme's markup can live BESIDES its files. A block theme — the
+	 * default for new sites since 2022, and all four bundled ones — is edited
+	 * in the Site Editor, which writes rows, not files: the integrity scan's
+	 * tree walk and wordpress.org's checksums can never see an injection
+	 * there, and neither can a file-editor observer. `custom_css` is the
+	 * Customizer's Additional CSS, the oldest place to hide a `</style>`
+	 * breakout.
+	 */
+	protected const CONTENT_TYPES = ['post', 'page',
+		'wp_template', 'wp_template_part', 'wp_global_styles', 'custom_css'];
+	
+	/** what to call the rows a person would not think of as a post */
+	protected const CONTENT_LABELS = [
+		'wp_template' => 'site-editor template',
+		'wp_template_part' => 'site-editor template part',
+		'wp_global_styles' => 'global styles',
+		'custom_css' => 'additional CSS',
+	];
+	
 	protected const KNOWN_SCRIPT_HOSTS = ['googleapis.com', 'gstatic.com', 'google.com', 'googletagmanager.com',
 		'google-analytics.com', 'googlesyndication.com', 'doubleclick.net', 'facebook.net', 'facebook.com',
 		'cloudflare.com', 'cloudflareinsights.com', 'jsdelivr.net', 'unpkg.com', 'jquery.com', 'bootstrapcdn.com',
@@ -406,10 +427,13 @@ class Database
 	}
 	
 	/**
-	 * C6: published posts and pages whose content carries a script from a
-	 * host that is neither the site nor a known third party, an iframe from
-	 * such a host, or an obfuscation idiom — SEO spam, skimmers, redirect
-	 * injections. Post ids and hosts only; a post body is never reported.
+	 * C6: published content whose body carries a script from a host that is
+	 * neither the site nor a known third party, an iframe from such a host,
+	 * or an obfuscation idiom — SEO spam, skimmers, redirect injections.
+	 * Posts and pages, and the four row types a BLOCK theme keeps its markup
+	 * in (CONTENT_TYPES): a template part edited in the Site Editor is not a
+	 * file, so nothing that walks the tree will ever see what is in it. Ids
+	 * and hosts only; a body is never reported.
 	 *
 	 * @return list<array<string, mixed>>
 	 */
@@ -426,7 +450,10 @@ class Database
 		
 		$markers = ['<script', '<iframe', 'eval(', 'fromCharCode', 'unescape('];
 		$where = [];
-		$values = [];
+		// the IN list rides prepare() like everything else: its placeholders
+		// come first in the statement, so its values come first here
+		$values = self::CONTENT_TYPES;
+		$types = implode(', ', array_fill(0, count(self::CONTENT_TYPES), '%s'));
 		
 		foreach($markers as $marker)
 		{
@@ -438,12 +465,13 @@ class Database
 		
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- a read-only forensic pass over published content, bounded by LIMIT and run once per scan; the WHERE is built from constants and every value rides through prepare()
 		$rows = $wpdb->get_results($wpdb->prepare(
-			'SELECT ID, post_content, post_modified_gmt FROM ' . $wpdb->posts
-			. " WHERE post_status = 'publish' AND post_type IN ('post', 'page') AND (" . implode(' OR ', $where) . ')'
+			'SELECT ID, post_type, post_content, post_modified_gmt FROM ' . $wpdb->posts
+			. " WHERE post_status = 'publish' AND post_type IN (" . $types . ') AND (' . implode(' OR ', $where) . ')'
 			. ' ORDER BY post_modified_gmt DESC LIMIT %d',
 			...$values), ARRAY_A);
-		$stats['posts_scanned'] = (int)$wpdb->get_var(
-			'SELECT COUNT(*) FROM ' . $wpdb->posts . " WHERE post_status = 'publish' AND post_type IN ('post', 'page')");
+		$stats['posts_scanned'] = (int)$wpdb->get_var($wpdb->prepare(
+			'SELECT COUNT(*) FROM ' . $wpdb->posts . " WHERE post_status = 'publish' AND post_type IN (" . $types . ')',
+			...self::CONTENT_TYPES));
 		// phpcs:enable
 		
 		$findings = [];
@@ -453,9 +481,16 @@ class Database
 			$id = (int)($row['ID'] ?? 0);
 			$modified = strtotime((string)($row['post_modified_gmt'] ?? '') . ' UTC');
 			
+			// the id alone is unambiguous (one table, one sequence), but nobody
+			// hunting "posts/412" expects to find a template part — so the row
+			// type rides the detail when it is not simply a post or a page
+			$label = self::CONTENT_LABELS[(string)($row['post_type'] ?? '')] ?? '';
+			
 			foreach($this->injections((string)($row['post_content'] ?? '')) as [$detector, $detail])
 			{
-				$findings[] = $this->finding($detector, Scan::TIER_HIGH, 'posts/' . $id, $detail, $modified === false ? 0 : $modified);
+				$findings[] = $this->finding($detector, Scan::TIER_HIGH, 'posts/' . $id,
+					$label === '' ? $detail : $label . ': ' . $detail,
+					$modified === false ? 0 : $modified);
 			}
 			
 			if(count($findings) >= self::MAX_PER_DETECTOR)
