@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace OvosConsole;
+namespace Ovos\Console;
 
 use function array_keys;
 use function implode;
@@ -701,6 +701,25 @@ class Settings
 			'redirect_external' => __('redirect to another host', 'ovos-console'),
 			'ini_prepend' => __('auto_prepend/append file live in php.ini', 'ovos-console'),
 			'ini_prepend_owned' => __('auto_prepend/append file live in php.ini (owned by a plugin)', 'ovos-console'),
+			'core_modified' => __('core file differs from what wordpress.org shipped', 'ovos-console'),
+			'core_foreign' => __('file under core that wordpress.org never shipped', 'ovos-console'),
+			'plugin_modified' => __('plugin file differs from what wordpress.org shipped', 'ovos-console'),
+			'plugin_foreign' => __('file in a wp.org plugin that its release never shipped', 'ovos-console'),
+			'admin_account' => __('administrator account (registered, sessions)', 'ovos-console'),
+			'admin_app_password' => __('application password on an administrator', 'ovos-console'),
+			'active_plugin_missing' => __('active plugin whose file is not on disk', 'ovos-console'),
+			'cron_orphan' => __('scheduled hook no plugin listens to', 'ovos-console'),
+			'cron_suspicious' => __('scheduled hook no plugin listens to, named like a payload', 'ovos-console'),
+			'uninstall_orphan' => __('uninstall callable for a plugin that is not installed', 'ovos-console'),
+			'option_code' => __('option value carrying code markers', 'ovos-console'),
+			'content_script' => __('script from a foreign host in published content', 'ovos-console'),
+			'content_iframe' => __('iframe from a foreign host in published content', 'ovos-console'),
+			'content_obfuscated' => __('obfuscation idiom in published content', 'ovos-console'),
+			'option_drift' => __('stored site URL disagrees with its constant', 'ovos-console'),
+			'registration_role' => __('registration open into a role above subscriber', 'ovos-console'),
+			'dir_changed' => __('directory changed after its newest file (something removed)', 'ovos-console'),
+			'owner_anomaly' => __('file owned by another uid than its siblings', 'ovos-console'),
+			'symlink_outside' => __('symlink leaving the site', 'ovos-console'),
 			default => $detector,
 		};
 	}

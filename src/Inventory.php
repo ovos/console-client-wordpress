@@ -2,7 +2,7 @@
 declare(strict_types=1);
 // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec -- the fire-and-forget inventory call needs millisecond timeouts (300 ms connect / 1 s total) the WP HTTP API cannot express; without curl the report is dropped rather than riding a blocking call at shutdown
 
-namespace OvosConsole;
+namespace Ovos\Console;
 
 use Throwable;
 

@@ -3,7 +3,7 @@ declare(strict_types=1);
 // phpcs:disable WordPress.PHP.DevelopmentFunctions -- error_reporting()/set_error_handler() are this plugin's purpose: it captures PHP errors, chaining any previous handler
 // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec -- the fire-and-forget ingest call needs millisecond timeouts (300 ms connect / 1 s total) the WP HTTP API cannot express; wp_remote_post() is the fallback when curl is missing
 
-namespace OvosConsole;
+namespace Ovos\Console;
 
 use ErrorException;
 use Throwable;

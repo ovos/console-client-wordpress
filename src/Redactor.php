@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace OvosConsole;
+namespace Ovos\Console;
 
 use function in_array;
 use function is_array;

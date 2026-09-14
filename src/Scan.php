@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
-// phpcs:disable WordPress.WP.AlternativeFunctions -- a read-only walk of the site's own tree (scandir, stat, a few hundred bytes read per candidate): WP_Filesystem exists for WRITES through FTP credentials and has nothing to offer a shutdown-time read; nothing here ever writes
+// phpcs:disable WordPress.WP.AlternativeFunctions -- a read-only walk of the site's own tree (scandir, stat, md5_file, a few hundred bytes read per candidate): WP_Filesystem exists for WRITES through FTP credentials and has nothing to offer a shutdown-time read; nothing here ever writes
 
-namespace OvosConsole;
+namespace Ovos\Console;
 
 use function apply_filters;
 use function array_pop;
@@ -19,22 +19,30 @@ use function fopen;
 use function fread;
 use function function_exists;
 use function get_bloginfo;
+use function get_locale;
 use function get_option;
+use function get_plugins;
 use function get_theme_root;
+use function gmdate;
 use function home_url;
 use function implode;
 use function in_array;
 use function ini_get;
+use function is_array;
 use function is_dir;
 use function is_file;
 use function is_link;
 use function is_multisite;
 use function is_string;
+use function max;
+use function md5_file;
 use function microtime;
 use function preg_match;
 use function preg_replace;
 use function preg_split;
 use function random_bytes;
+use function readlink;
+use function realpath;
 use function round;
 use function rtrim;
 use function sanitize_text_field;
@@ -44,6 +52,7 @@ use function str_contains;
 use function str_replace;
 use function str_starts_with;
 use function strlen;
+use function strpos;
 use function strrpos;
 use function strtolower;
 use function substr;
@@ -51,8 +60,8 @@ use function time;
 use function trim;
 use function wp_get_environment_type;
 use function wp_get_upload_dir;
-use function wp_unslash;
 use function wp_parse_url;
+use function wp_unslash;
 
 use const ABSPATH;
 use const DIRECTORY_SEPARATOR;
@@ -69,8 +78,9 @@ use const SCANDIR_SORT_NONE;
  * plugin arrived, used once and left behind, does none of that. This class
  * asks the tree directly — is there executable code where none belongs, an
  * image that opens with `<?php`, a directive that makes images execute, a
- * drop-in whose owner is not installed — and answers with paths, never with
- * contents.
+ * drop-in whose owner is not installed, a core or plugin file that is not
+ * what wordpress.org shipped (Checksums) — and the database beside it
+ * (Database) — and answers with paths, never with contents.
  *
  * READS ONLY. Never writes, deletes, renames or quarantines: a wrong guess
  * must cost a second look, not a file. Never touches .htaccess. Never
@@ -82,7 +92,9 @@ use const SCANDIR_SORT_NONE;
  * between requests, so a shutdown hook can spend 500 ms per request and a
  * button press a few seconds, and both resume where they stopped. Phases
  * run in order of expected value — the root, then uploads, then wp-content
- * itself — so an interrupted pass has already shipped the urgent part.
+ * itself — so an interrupted pass has already shipped the urgent part. A
+ * checksum list that still has to be fetched can YIELD a chunk: the
+ * directory goes back on the stack and the next request pays for the fetch.
  *
  * PRECISION FIRST: a scanner that names something innocent gets switched
  * off, which is worse than one that is late. Every heuristic here carries
@@ -100,7 +112,7 @@ class Scan
 	
 	public const TIERS = [self::TIER_URGENT, self::TIER_HIGH, self::TIER_INFO];
 	
-	public const AREAS = ['root', 'uploads', 'content', 'plugins', 'core', 'themes'];
+	public const AREAS = ['root', 'uploads', 'content', 'plugins', 'core', 'themes', Database::AREA];
 	
 	/**
 	 * Findings carried in full; past this the report counts them per tier.
@@ -116,6 +128,9 @@ class Scan
 	
 	protected const MAX_DIRECTIVES_PER_FILE = 10;
 	
+	/** the polish detectors (dir_changed, owner_anomaly, symlink_outside) each stop listing here */
+	protected const MAX_PER_POLISH = 20;
+	
 	/**
 	 * The first block of a media-shaped file — enough to see the `<?php`
 	 * that a favicon.ico shell puts behind a few bytes of decoy
@@ -127,6 +142,17 @@ class Scan
 	protected const DIRECTIVE_BYTES = 65536;
 	
 	protected const MIN_POLYGLOT_SIZE = 5;
+	
+	/** a directory changed after its newest file inside this window is worth dating */
+	protected const RECENT_CHANGE = 30 * 86400;
+	
+	/**
+	 * Checksum lists fetched per chunk before the walk yields to the next
+	 * request: a shutdown chunk pays for one, a button round for a few
+	 */
+	protected const FETCHES_BACKGROUND = 1;
+	
+	protected const FETCHES_MANUAL = 3;
 	
 	/**
 	 * Executable-shaped: the PHP family plus what Apache may hand to PHP or
@@ -246,6 +272,13 @@ class Scan
 	
 	protected ?string $host = null;
 	
+	protected ?Checksums $sums = null;
+	
+	/** the core list for this request, loaded once; false = unavailable this pass */
+	protected array|false|null $coreList = null;
+	
+	protected int $fetchLimit = self::FETCHES_BACKGROUND;
+	
 	public function __construct(
 		protected Config $config,
 	)
@@ -253,7 +286,8 @@ class Scan
 	}
 	
 	/**
-	 * A fresh pass: the phase list, empty counters, no position yet
+	 * A fresh pass: the phase list, empty counters, no position yet — and
+	 * the plugin versions the checksum lists are keyed by
 	 */
 	public function start(
 		string $mode,
@@ -279,6 +313,7 @@ class Scan
 		$phases[] = ['core', $roots['root'] . '/wp-admin', true, []];
 		$phases[] = ['core', $roots['root'] . '/wp-includes', true, []];
 		$phases[] = ['themes', $roots['themes'], true, []];
+		$phases[] = [Database::AREA, '', false, []];
 		$phases[] = ['posture', '', false, []];
 		
 		$areas = [];
@@ -292,6 +327,7 @@ class Scan
 					'content' => $roots['content'],
 					'plugins' => $roots['plugins'],
 					'themes' => $roots['themes'],
+					Database::AREA => '',
 					default => $roots['root'],
 				},
 				'files' => 0,
@@ -299,6 +335,10 @@ class Scan
 				'executable' => 0,
 				'bytes' => 0,
 				'probed' => 0,
+				'verified' => 0,
+				'modified' => 0,
+				'foreign' => 0,
+				'missing' => 0,
 			];
 		}
 		
@@ -313,16 +353,26 @@ class Scan
 			'phase' => 0,
 			'opened' => false,
 			'stack' => [],
+			'yield' => false,
 			'areas' => $areas,
 			'findings' => [],
 			'counts' => [self::TIER_URGENT => 0, self::TIER_HIGH => 0, self::TIER_INFO => 0],
 			'truncated' => [self::TIER_URGENT => 0, self::TIER_HIGH => 0, self::TIER_INFO => 0],
+			'polish' => ['dir_changed' => 0, 'owner_anomaly' => 0, 'symlink_outside' => 0],
 			'skipped' => [],
 			'unreadable' => 0,
 			'symlinks' => 0,
 			'vcs' => [],
 			'uploads_htaccess' => false,
 			'uploads_php_denied' => false,
+			'versions' => $this->pluginVersions(),
+			'core_version' => Inventory::version((string)get_bloginfo('version')),
+			'locale' => function_exists('get_locale') ? (string)get_locale() : 'en_US',
+			'checksums' => [
+				'core' => 'pending',
+				'core_locale' => '',
+				'plugins' => [],
+			],
 			'posture' => null,
 			'done' => false,
 		];
@@ -331,7 +381,9 @@ class Scan
 	/**
 	 * Spend up to $budgetMs on the pass and hand the position back. A
 	 * directory is the unit of work: the budget is checked between
-	 * directories, so one enormous flat directory may overrun it once.
+	 * directories, so one enormous flat directory may overrun it once. A
+	 * checksum list the chunk may not fetch any more YIELDS: the directory
+	 * goes back on the stack and the next request continues there.
 	 */
 	public function advance(
 		array $state,
@@ -339,9 +391,15 @@ class Scan
 	): array
 	{
 		$this->roots = $state['roots'];
+		$this->fetchLimit = ($state['mode'] ?? '') === 'manual' ? self::FETCHES_MANUAL : self::FETCHES_BACKGROUND;
+		$this->sums ??= new Checksums(($state['mode'] ?? '') === 'manual' ? 4 : 2);
+		$this->sums->fetches = 0;
+		$this->coreList = null;
+		
 		$begun = microtime(true);
 		$deadline = $begun + $budgetMs / 1000;
 		$state['chunks']++;
+		$state['yield'] = false;
 		
 		while($state['done'] === false && microtime(true) < $deadline)
 		{
@@ -360,6 +418,21 @@ class Scan
 				$state['phase']++;
 				
 				continue;
+			}
+			
+			if($area === Database::AREA)
+			{
+				$this->database($state);
+				$state['phase']++;
+				
+				continue;
+			}
+			
+			// the areas the core list vouches for wait for it — one fetch,
+			// once per month, and never past this chunk's fetch budget
+			if(in_array($area, ['root', 'core', 'themes'], true) && $this->ensureCore($state) === false)
+			{
+				break;
 			}
 			
 			if($state['opened'] === false)
@@ -381,6 +454,13 @@ class Scan
 			[$area, $dir, $flags] = array_pop($state['stack']);
 			
 			$this->visit($state, $area, $dir, $flags);
+			
+			if($state['yield'])
+			{
+				$state['yield'] = false;
+				
+				break;
+			}
 		}
 		
 		$state['elapsed'] += (int)round((microtime(true) - $begun) * 1000);
@@ -427,17 +507,37 @@ class Scan
 		
 		foreach($state['areas'] as $area => $stats)
 		{
-			$areas[$area] = [
-				'root' => $this->clean((string)$stats['root']),
-				'files' => (int)$stats['files'],
-				'dirs' => (int)$stats['dirs'],
-				'executable' => (int)$stats['executable'],
-				'bytes' => (int)$stats['bytes'],
-				'probed' => (int)$stats['probed'],
-			];
+			$entry = ['root' => $this->clean((string)$stats['root'])];
+			
+			foreach($stats as $key => $value)
+			{
+				if($key !== 'root')
+				{
+					$entry[$key] = (int)$value;
+				}
+			}
+			
+			$areas[$area] = $entry;
 			$files += (int)$stats['files'];
 			$dirs += (int)$stats['dirs'];
 		}
+		
+		$verified = [];
+		$unavailable = [];
+		
+		foreach((array)($state['checksums']['plugins'] ?? []) as $slug => $word)
+		{
+			if($word === 'verified')
+			{
+				$verified[] = (string)$slug;
+			}
+			elseif($word === 'unavailable')
+			{
+				$unavailable[] = (string)$slug;
+			}
+		}
+		
+		$core = (string)($state['checksums']['core'] ?? 'skipped');
 		
 		$report = [
 			'v' => 1,
@@ -461,6 +561,12 @@ class Scan
 				'skipped' => $state['skipped'],
 				'counts' => $state['counts'],
 				'truncated' => $state['truncated'],
+			],
+			'checksums' => [
+				'core' => $core === 'pending' ? 'skipped' : $core,
+				'core_locale' => (string)($state['checksums']['core_locale'] ?? ''),
+				'plugins_verified' => $verified,
+				'plugins_unavailable' => $unavailable,
 			],
 			'areas' => $areas,
 			'findings' => $state['findings'],
@@ -488,7 +594,8 @@ class Scan
 	 * One directory: files inspected, subdirectories pushed. The root area
 	 * lists its files only (wp-admin and wp-includes are the core area's);
 	 * the wp-content top level classifies each subdirectory instead of
-	 * descending blindly.
+	 * descending blindly. A plugin's top directory first makes sure its
+	 * checksum list is known — or yields the chunk to fetch it next time.
 	 */
 	protected function visit(
 		array &$state,
@@ -497,6 +604,15 @@ class Scan
 		array $flags,
 	): void
 	{
+		if($area === 'plugins' && dirname($dir) === $this->roots['plugins']
+			&& $this->ensurePlugin($state, basename($dir)) === false)
+		{
+			$state['stack'][] = [$area, $dir, $flags];
+			$state['yield'] = true;
+			
+			return;
+		}
+		
 		$entries = @scandir($dir, SCANDIR_SORT_NONE);
 		
 		if($entries === false)
@@ -510,6 +626,9 @@ class Scan
 		
 		$top = $area === 'content' && $dir === $this->roots['content'];
 		$recursive = (bool)($flags['recursive'] ?? false);
+		$names = [];
+		$newest = 0;
+		$owners = [];
 		
 		foreach($entries as $name)
 		{
@@ -519,10 +638,11 @@ class Scan
 			}
 			
 			$path = $dir . '/' . $name;
+			$names[$name] = true;
 			
 			if(@is_link($path))
 			{
-				$state['symlinks']++;
+				$this->inspectSymlink($state, $area, $path);
 				
 				continue;
 			}
@@ -565,8 +685,18 @@ class Scan
 				continue;
 			}
 			
-			$this->inspect($state, $area, $path, $name, $flags);
+			$stat = $this->inspect($state, $area, $path, $name, $flags);
+			
+			if($stat !== null)
+			{
+				$newest = max($newest, (int)$stat['mtime']);
+				$owners[(int)$stat['uid']][] = $name;
+			}
 		}
+		
+		$this->missing($state, $area, $dir, $names);
+		$this->dirChanged($state, $area, $dir, $newest, count($owners) > 0);
+		$this->ownerAnomaly($state, $area, $dir, $owners);
 	}
 	
 	/**
@@ -621,7 +751,10 @@ class Scan
 	
 	/**
 	 * One file: counted, then shape-checked — executable names by area,
-	 * directive files by content, media names for a PHP opener
+	 * directive files by content, media names for a PHP opener. Answers the
+	 * stat so the directory can date itself and compare owners.
+	 *
+	 * @return array{size: int, mtime: int, uid: int}|null
 	 */
 	protected function inspect(
 		array &$state,
@@ -629,17 +762,19 @@ class Scan
 		string $path,
 		string $name,
 		array $flags,
-	): void
+	): ?array
 	{
 		$stat = @stat($path);
 		$size = $stat !== false ? (int)$stat['size'] : 0;
 		$mtime = $stat !== false ? (int)$stat['mtime'] : 0;
+		$uid = $stat !== false ? (int)$stat['uid'] : 0;
 		
 		$state['areas'][$area]['files']++;
 		$state['areas'][$area]['bytes'] += $size;
 		
 		$meta = ['size' => $size, 'mtime' => $mtime];
 		$lower = strtolower($name);
+		$answer = $stat === false ? null : ['size' => $size, 'mtime' => $mtime, 'uid' => $uid];
 		
 		if(preg_match(self::EXECUTABLE, $name) === 1)
 		{
@@ -647,17 +782,19 @@ class Scan
 			
 			$this->inspectExecutable($state, $area, $path, $name, $size, $flags, $meta);
 			
-			return;
+			return $answer;
 		}
 		
 		if(in_array($lower, self::DIRECTIVE_FILES, true))
 		{
 			$this->inspectDirectives($state, $area, $path, $meta);
 			
-			return;
+			return $answer;
 		}
 		
 		$this->inspectPolyglot($state, $area, $path, $lower, $size, $meta);
+		
+		return $answer;
 	}
 	
 	/**
@@ -665,8 +802,7 @@ class Scan
 	 * finding; under uploads anything but a listing stub is; in the root
 	 * anything core did not ship is; at the wp-content top level a drop-in
 	 * is judged by its owner and anything else is a stranger; in plugins,
-	 * themes and core the checksum pass (a later slice) is the judge, so
-	 * this one says nothing.
+	 * themes and core the checksum list is the judge where one exists.
 	 */
 	protected function inspectExecutable(
 		array &$state,
@@ -701,6 +837,11 @@ class Scan
 			case 'root':
 				if(in_array($name, Sender::CORE_ROOT_FILES, true))
 				{
+					// compared when listed; wp-config.php is core's own root file
+					// the list never carries, and nothing else can stand here
+					// without being root_php already
+					$this->verify($state, $area, $path, $name, $meta, 'core', null, false);
+					
 					return;
 				}
 				
@@ -718,6 +859,22 @@ class Scan
 			case 'content':
 				$this->inspectContentExecutable($state, $path, $name, $size, $flags, $meta);
 				
+				return;
+			
+			case 'core':
+				$this->verify($state, $area, $path, $this->relative($path, $this->roots['root']), $meta, 'core');
+				
+				return;
+			
+			case 'plugins':
+				$this->verifyInside($state, $path, $meta);
+				
+				return;
+				
+			case 'themes':
+				// no list vouches for a theme: wp.org has no theme checksums, and
+				// the core list's bundled themes are the VERSIONS shipped with that
+				// core release, which the theme updater has long since replaced
 				return;
 			
 			default:
@@ -805,6 +962,292 @@ class Scan
 		}
 		
 		$this->finding($state, 'content', $path, 'content_php', self::TIER_HIGH, '', $meta);
+	}
+	
+	/**
+	 * A file under a root wordpress.org vouches for, against a list: listed
+	 * and equal → verified; listed and different → MODIFIED; not listed →
+	 * FOREIGN — the two verdicts with authority behind them. With no list
+	 * this pass, nothing is said.
+	 *
+	 * @param string $key the list's own path for the file
+	 * @param string $kind core|plugin|theme — the detector family and its tier
+	 * @param array<string, string>|null $list the plugin's own list; null = core's
+	 */
+	protected function verify(
+		array &$state,
+		string $area,
+		string $path,
+		string $key,
+		array $meta,
+		string $kind,
+		?array $list = null,
+		bool $foreignIsFinding = true,
+	): void
+	{
+		$list ??= $this->coreList($state);
+		
+		if(is_array($list) === false)
+		{
+			return;
+		}
+		
+		$tier = $kind === 'core' ? self::TIER_URGENT : self::TIER_HIGH;
+		
+		if(isset($list[$key]) === false)
+		{
+			if($foreignIsFinding === false)
+			{
+				return;
+			}
+			
+			$state['areas'][$area]['foreign']++;
+			
+			$this->finding($state, $area, $path, $kind . '_foreign', $tier,
+				'not in the wordpress.org list for this version', $meta);
+			
+			return;
+		}
+		
+		$md5 = @md5_file($path);
+		
+		if($md5 === false)
+		{
+			return;
+		}
+		
+		if(strtolower($md5) === $list[$key])
+		{
+			$state['areas'][$area]['verified']++;
+			
+			return;
+		}
+		
+		$state['areas'][$area]['modified']++;
+		
+		$this->finding($state, $area, $path, $kind . '_modified', $tier,
+			'md5 differs from the wordpress.org list for this version', $meta);
+	}
+	
+	/**
+	 * A file inside a plugin directory, against the plugin's own wp.org list
+	 * where one exists. A single-file plugin (hello.php) has no directory to
+	 * key a list by and updates apart from core, so it is not verified; a
+	 * premium or custom plugin has no list and is not judged either.
+	 */
+	protected function verifyInside(
+		array &$state,
+		string $path,
+		array $meta,
+	): void
+	{
+		$relative = $this->relative($path, $this->roots['plugins']);
+		$slash = strpos($relative, '/');
+		
+		if($slash === false)
+		{
+			return;
+		}
+		
+		$slug = substr($relative, 0, $slash);
+		
+		if(($state['checksums']['plugins'][$slug] ?? '') !== 'verified')
+		{
+			return;
+		}
+		
+		$list = $this->sums?->plugin($slug, (string)($state['versions'][$slug] ?? ''));
+		
+		if($list !== null)
+		{
+			$this->verify($state, 'plugins', $path, substr($relative, $slash + 1), $meta, 'plugin', $list);
+		}
+	}
+	
+	/**
+	 * The listed files a directory should hold but does not — counted per
+	 * area, never listed: hosts strip readmes, and a missing file is not an
+	 * intrusion. Only directories a list speaks for.
+	 *
+	 * @param array<string, true> $names the entries seen in the directory
+	 */
+	protected function missing(
+		array &$state,
+		string $area,
+		string $dir,
+		array $names,
+	): void
+	{
+		$list = null;
+		$directory = '';
+		
+		if($area === 'core' || $area === 'root')
+		{
+			$list = $this->coreList($state);
+			$directory = $area === 'root' ? '' : $this->relative($dir, $this->roots['root']);
+		}
+		elseif($area === 'plugins')
+		{
+			$relative = $this->relative($dir, $this->roots['plugins']);
+			$slug = explode('/', $relative, 2)[0];
+			
+			if($relative !== $slug || $dir !== $this->roots['plugins'])
+			{
+				if(($state['checksums']['plugins'][$slug] ?? '') === 'verified')
+				{
+					$list = $this->sums?->plugin($slug, (string)($state['versions'][$slug] ?? ''));
+					$directory = $relative === $slug ? '' : substr($relative, strlen($slug) + 1);
+				}
+			}
+		}
+		
+		if(is_array($list) === false)
+		{
+			return;
+		}
+		
+		foreach(Checksums::expected($list, $directory) as $name)
+		{
+			if(isset($names[$name]) === false)
+			{
+				$state['areas'][$area]['missing']++;
+			}
+		}
+	}
+	
+	/**
+	 * B9 — a directory changed after its newest file: something was deleted
+	 * or renamed here recently (the shell the attacker removed, dated).
+	 * Uploads and the root only, the last thirty days only, info.
+	 */
+	protected function dirChanged(
+		array &$state,
+		string $area,
+		string $dir,
+		int $newest,
+		bool $hasFiles,
+	): void
+	{
+		if(($area !== 'uploads' && $area !== 'root') || $hasFiles === false
+			|| $state['polish']['dir_changed'] >= self::MAX_PER_POLISH)
+		{
+			return;
+		}
+		
+		$stat = @stat($dir);
+		$changed = $stat === false ? 0 : (int)$stat['mtime'];
+		
+		if($changed > $newest + 60 && $changed > time() - self::RECENT_CHANGE)
+		{
+			$state['polish']['dir_changed']++;
+			
+			$this->finding($state, $area, $dir === (string)$state['areas'][$area]['root'] ? $dir . '/.' : $dir, 'dir_changed', self::TIER_INFO,
+				'directory changed ' . gmdate('Y-m-d H:i', $changed) . ', newest file ' . gmdate('Y-m-d H:i', $newest)
+				. ' — something was removed or renamed here', ['mtime' => $changed]);
+		}
+	}
+	
+	/**
+	 * B11 — a file whose owner differs from its directory's siblings: the
+	 * web server wrote among the deploy user's files. Silent on Windows and
+	 * on shared hosting, where everything is one uid.
+	 *
+	 * @param array<int, list<string>> $owners uid → file names
+	 */
+	protected function ownerAnomaly(
+		array &$state,
+		string $area,
+		string $dir,
+		array $owners,
+	): void
+	{
+		if(DIRECTORY_SEPARATOR === '\\' || count($owners) < 2
+			|| $state['polish']['owner_anomaly'] >= self::MAX_PER_POLISH)
+		{
+			return;
+		}
+		
+		$total = 0;
+		$majority = 0;
+		$majorityUid = 0;
+		
+		foreach($owners as $uid => $names)
+		{
+			$total += count($names);
+			
+			if(count($names) > $majority)
+			{
+				$majority = count($names);
+				$majorityUid = $uid;
+			}
+		}
+		
+		if($total < 3)
+		{
+			return;
+		}
+		
+		foreach($owners as $uid => $names)
+		{
+			if($uid === $majorityUid)
+			{
+				continue;
+			}
+			
+			foreach($names as $name)
+			{
+				if($state['polish']['owner_anomaly'] >= self::MAX_PER_POLISH)
+				{
+					return;
+				}
+				
+				$state['polish']['owner_anomaly']++;
+				
+				$this->finding($state, $area, $dir . '/' . $name, 'owner_anomaly', self::TIER_HIGH,
+					'owned by uid ' . $uid . ' among files owned by uid ' . $majorityUid);
+			}
+		}
+	}
+	
+	/**
+	 * B12 — a symlink is counted, never followed; one that leaves the site
+	 * (another vhost's tree, /etc) is the symlink attack and a finding
+	 */
+	protected function inspectSymlink(
+		array &$state,
+		string $area,
+		string $path,
+	): void
+	{
+		$state['symlinks']++;
+		
+		$target = @readlink($path);
+		
+		if($target === false || $state['polish']['symlink_outside'] >= self::MAX_PER_POLISH)
+		{
+			return;
+		}
+		
+		$absolute = str_starts_with($target, '/') || preg_match('~^[A-Za-z]:[\\\\/]~', $target) === 1
+			? $target
+			: dirname($path) . '/' . $target;
+		$resolved = @realpath($absolute);
+		$resolved = $this->normalize($resolved === false ? $absolute : $resolved);
+		
+		foreach(['root', 'content', 'uploads'] as $root)
+		{
+			$prefix = $this->roots[$root];
+			
+			if($prefix !== '' && ($resolved === $prefix || str_starts_with($resolved, $prefix . '/')))
+			{
+				return;
+			}
+		}
+		
+		$state['polish']['symlink_outside']++;
+		
+		$this->finding($state, $area, $path, 'symlink_outside', self::TIER_HIGH,
+			'symlink leaving the site → ' . $resolved);
 	}
 	
 	/**
@@ -987,6 +1430,30 @@ class Scan
 	}
 	
 	/**
+	 * The database phase (WS3): the attacker's other filesystem, read by
+	 * Database — every finding an id, an option name or a hook, never a
+	 * name or a value
+	 */
+	protected function database(
+		array &$state,
+	): void
+	{
+		$result = (new Database)->scan();
+		
+		foreach($result['findings'] as $finding)
+		{
+			$this->finding($state, Database::AREA, (string)$finding['path'], (string)$finding['detector'],
+				(string)$finding['tier'], (string)($finding['detail'] ?? ''),
+				isset($finding['mtime']) ? ['mtime' => (int)$finding['mtime']] : []);
+		}
+		
+		foreach($result['stats'] as $key => $value)
+		{
+			$state['areas'][Database::AREA][$key] = (int)$value;
+		}
+	}
+	
+	/**
 	 * The final phase: the site's posture, so the console's advice can say
 	 * "and close the door" — plus the one live directive that no file scan
 	 * sees, the ini's own auto_prepend_file
@@ -1050,6 +1517,139 @@ class Scan
 				$owner !== null ? self::TIER_INFO : self::TIER_URGENT,
 				$key . ($owner !== null ? ' owned by ' . $owner : ' is live in php.ini'));
 		}
+	}
+	
+	/**
+	 * The core list for this pass, fetched once the chunk's budget allows:
+	 * true when the phase may go on (list known, or known to be
+	 * unavailable), false when the chunk must yield for the fetch
+	 */
+	protected function ensureCore(
+		array &$state,
+	): bool
+	{
+		if(($state['checksums']['core'] ?? 'pending') !== 'pending')
+		{
+			return true;
+		}
+		
+		$version = (string)$state['core_version'];
+		$locale = (string)$state['locale'];
+		
+		if($this->sums === null || $version === '')
+		{
+			$state['checksums']['core'] = 'unavailable';
+			
+			return true;
+		}
+		
+		if($this->sums->coreCached($version, $locale) === false && $this->sums->fetches >= $this->fetchLimit)
+		{
+			return false;
+		}
+		
+		$list = $this->sums->core($version, $locale);
+		$state['checksums']['core'] = $list === null ? 'unavailable' : 'verified';
+		$state['checksums']['core_locale'] = $list === null ? '' : $locale;
+		
+		return true;
+	}
+	
+	/**
+	 * The core list, loaded once per request; false when this pass has none
+	 */
+	protected function coreList(
+		array $state,
+	): array|false
+	{
+		if($this->coreList !== null)
+		{
+			return $this->coreList;
+		}
+		
+		if(($state['checksums']['core'] ?? '') !== 'verified' || $this->sums === null)
+		{
+			return $this->coreList = false;
+		}
+		
+		$list = $this->sums->core((string)$state['core_version'],
+			(string)(($state['checksums']['core_locale'] ?? '') !== '' ? $state['checksums']['core_locale'] : $state['locale']));
+		
+		return $this->coreList = $list ?? false;
+	}
+	
+	/**
+	 * A plugin's list: known (the state remembers verified/unavailable per
+	 * slug), or fetched now within the chunk's budget — false when the
+	 * chunk must yield for it. A plugin without a version header, or one
+	 * wp.org never had, is simply unverified.
+	 */
+	protected function ensurePlugin(
+		array &$state,
+		string $slug,
+	): bool
+	{
+		if(isset($state['checksums']['plugins'][$slug]))
+		{
+			return true;
+		}
+		
+		$version = (string)($state['versions'][$slug] ?? '');
+		
+		if($this->sums === null || $version === '' || Inventory::slugOf($slug) !== $slug)
+		{
+			$state['checksums']['plugins'][$slug] = 'unavailable';
+			
+			return true;
+		}
+		
+		if($this->sums->pluginCached($slug, $version) === false && $this->sums->fetches >= $this->fetchLimit)
+		{
+			return false;
+		}
+		
+		$state['checksums']['plugins'][$slug] = $this->sums->plugin($slug, $version) === null ? 'unavailable' : 'verified';
+		
+		return true;
+	}
+	
+	/**
+	 * Every installed plugin's version by directory slug — the key wp.org's
+	 * lists are kept under. A single-file plugin has no directory and is the
+	 * core list's business (hello.php).
+	 *
+	 * @return array<string, string>
+	 */
+	protected function pluginVersions(): array
+	{
+		if(function_exists('get_plugins') === false)
+		{
+			if(defined('ABSPATH') && is_file(ABSPATH . 'wp-admin/includes/plugin.php'))
+			{
+				require_once ABSPATH . 'wp-admin/includes/plugin.php';
+			}
+			
+			if(function_exists('get_plugins') === false)
+			{
+				return [];
+			}
+		}
+		
+		$versions = [];
+		
+		foreach((array)get_plugins() as $file => $headers)
+		{
+			$directory = dirname((string)$file);
+			
+			if($directory === '.' || $directory === '')
+			{
+				continue;
+			}
+			
+			$versions[$directory] ??= Inventory::version((string)($headers['Version'] ?? ''));
+		}
+		
+		return $versions;
 	}
 	
 	/**

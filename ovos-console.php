@@ -25,12 +25,12 @@ if(PHP_VERSION_ID < 80100)
 }
 
 spl_autoload_register(static function ($class) {
-	if(strpos($class, 'OvosConsole\\') !== 0)
+	if(strpos($class, 'Ovos\\Console\\') !== 0)
 	{
 		return;
 	}
 	
-	$file = __DIR__ . '/src/' . str_replace('\\', '/', substr($class, 12)) . '.php';
+	$file = __DIR__ . '/src/' . str_replace('\\', '/', substr($class, 13)) . '.php';
 	
 	if(is_file($file))
 	{
@@ -38,7 +38,7 @@ spl_autoload_register(static function ($class) {
 	}
 });
 
-OvosConsole\Plugin::boot(__FILE__);
+Ovos\Console\Plugin::boot(__FILE__);
 
 if(function_exists('ovos_console') === false)
 {
@@ -48,11 +48,11 @@ if(function_exists('ovos_console') === false)
 	 *   ovos_console()->captureException($e, ['orderId' => 7]);
 	 *   ovos_console()->captureMessage('checkout step skipped', 4);
 	 *
-	 * @return OvosConsole\Sender|null
+	 * @return Ovos\Console\Sender|null
 	 */
 	function ovos_console()
 	{
-		$plugin = OvosConsole\Plugin::instance();
+		$plugin = Ovos\Console\Plugin::instance();
 		
 		return $plugin !== null ? $plugin->sender : null;
 	}

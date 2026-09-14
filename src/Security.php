@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace OvosConsole;
+namespace Ovos\Console;
 
 use WP_Error;
 use WP_User;

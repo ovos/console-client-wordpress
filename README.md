@@ -270,6 +270,11 @@ core → themes, so an interrupted pass has already covered the urgent part):
 | a drop-in (`object-cache.php`, `advanced-cache.php`, `db.php`, `wp-cache-config.php`) with none of its known plugins installed and no vendor header | high | the shell disguised as a cache config — a drop-in with a vendor header or an installed owner is listed as `info` |
 | a plugin data directory (`wflogs`, `w3tc-config`, `updraft`, …) whose plugin is not installed | high | listed and never descended: the directory is the finding |
 | must-use plugins, drop-ins with an owner, `install.php` | info / high | listed for the operator; `install.php` on a live site is high |
+| **checksums** — a core file that differs from wordpress.org's list for this version, or a PHP file under `wp-admin/` / `wp-includes/` the list never had | urgent | the backdoored `wp-load.php`, the `class-wp-helper.php` nobody shipped — `core_modified` / `core_foreign` |
+| **checksums** — the same two verdicts inside a wp.org plugin's directory, against the plugin's own list for its installed version | high | `plugin_modified` / `plugin_foreign`; a premium or custom plugin has no list and is not judged, themes are never judged this way |
+| **database** — administrators (registration date, sessions, last login), application passwords on admins, active plugins whose file is gone, scheduled hooks nobody listens to, uninstall callables of gone plugins, options carrying code markers, foreign scripts / iframes / obfuscation in published content and widgets, a site URL disagreeing with its constant, registration into a role above subscriber | info – high | the attacker's other filesystem; ids, option names and hook names only — never a login, an e-mail, a value or a post body |
+| a directory under uploads or in the root that changed after its newest file | info | something was removed or renamed here recently — dated, so the console can hold it against the waves |
+| a file owned by another uid than its siblings; a symlink leaving the site | high | the web server writing among the deploy user's files; the symlink attack (silent on Windows and single-uid hosting) |
 
 Plus the **posture**: `DISALLOW_FILE_EDIT`, `DISALLOW_FILE_MODS`, debug
 display, whether uploads denies PHP by `.htaccess` (Apache/LiteSpeed only),
@@ -277,6 +282,24 @@ world-writable uploads, world-readable `wp-config.php`, XML-RPC, open
 registration and its default role, version control in the document root,
 `readme.html`, and the ini fingerprint (`auto_prepend_file`, `open_basedir`,
 `disable_functions`, `user_ini.filename`, OPcache).
+
+The checksum lists come from wordpress.org — core by version and locale
+(`api.wordpress.org/core/checksums`), every wp.org plugin by slug and installed
+version (`downloads.wordpress.org/plugin-checksums`) — fetched once per version,
+kept in a transient for a month, a 404 remembered for a week. A background
+chunk fetches at most one list and yields the rest to the next request; a
+*Scan now* round fetches three. Listed files missing from disk are counted per
+area, never listed: hosts strip readmes, and a missing file is not an
+intrusion. Every finding a list produced carries `md5 differs …` or `not in
+the wordpress.org list …` as its detail, so the authority behind it is visible.
+
+The database checks run once per pass, bounded (`LIMIT`s, twenty findings per
+detector), read-only, and report what can be acted on without disclosing
+anything private: `users/<id>` with the registration date as the finding's
+date (the console holds it against the attack waves of the same hours —
+*admin #57 was registered forty seconds after 27.0.113.86 stopped probing*),
+`options/<name>` with the length and the marker, `options/cron/<hook>`,
+`posts/<id>` with the foreign host.
 
 What it never does: write, delete, rename, quarantine or touch `.htaccess`;
 follow a symlink; descend into `.git`, `node_modules`, `wp-content/cache` or
