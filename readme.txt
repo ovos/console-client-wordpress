@@ -4,7 +4,7 @@ Tags: error monitoring, error reporting, javascript errors, logging, debugging
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.7.0
+Stable tag: 0.6.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -61,7 +61,7 @@ From 0.4.5 on the plugin keeps itself current: its `Update URI` header points Wo
 
 == Changelog ==
 
-= 0.7.0 =
+= 0.6.1 =
 * New: an integrity scan — the static half of finding the file nobody shipped. Every sensor so far needed the foreign file to DO something after the plugin was installed: throw an error, be saved through the editor, be activated. A shell dropped before the plugin arrived, used once and left behind, does none of that. The scan asks the tree directly, in a read-only walk: PHP under uploads (`x.php`, but also `shell.php.jpg`), media files that open with a PHP tag (the `favicon_a1b2.ico` family), PHP in the document root that WordPress did not ship, hidden PHP, `.htaccess`/`.user.ini`/`php.ini` directives that make other files execute (`auto_prepend_file`, `AddHandler … .jpg`, `SetHandler`, `engine on` under uploads) or send visitors elsewhere, drop-ins and plugin data directories whose plugin is not installed, and the live `auto_prepend_file` of the PHP configuration itself — plus the hardening posture the removal advice depends on (file editor, file modifications, debug display, PHP denied under uploads, world-writable uploads, world-readable wp-config.php, XML-RPC, open registration, version control in the document root). Findings are paths, sizes and dates: never a file's content. Nothing is deleted or changed, ever. Plugin-owned data directories (Wordfence's `wflogs`, UpdraftPlus' backups, the caching plugins' config directories) are listed, never descended; a symlink is counted, never followed.
 * Two ways to run it: a **Scan now** button under Settings → ovos console — the install-day case; the results appear on that page within seconds, whether or not a console is connected, and the page continues a long pass by itself — and an opt-in background pass (`Integrity scan`, or `OVOS_CONSOLE_SCAN`) that spends half a second per request after the response went out, one full pass per interval (daily or weekly, `OVOS_CONSOLE_SCAN_INTERVAL`), no WP-Cron, no APCu. Both post the completed report to the console's `/api/v1/ingest/files`; a console without that endpoint answers 404 and the results still stand on the settings page.
 * Precision first: the known false positives are held down by rule, not by baseline — the `index.php` stubs plugins write into uploads, WordPress' own `.l10n.php` translations under `wp-content/languages`, dotfile tool configs in vendored packages, Wordfence's `wordfence-waf.php` and its prepend directive, managed hosts' drop-ins carrying a vendor header. A finding is a place to look, not a verdict; the tier on it is the plugin's proposal and the console decides.
